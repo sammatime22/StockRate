@@ -1,4 +1,0 @@
-# Used to make the StockRater, written in C++
-
-stockrate: 
-	g++ -o stockrate -I header src/stockrate.cpp

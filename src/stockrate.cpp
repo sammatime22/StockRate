@@ -49,8 +49,8 @@ class StockRate {
             double average_velocity = sum_of_velocities / values_calculated;
 
             // here we would calculate up to the next 7 potential values
-            ValueTimeTuple* calculated_future_values;
-            ValueTimeTuple* calculated_future_values_list_head;
+            ValueTimeTuple* calculated_future_values = new ValueTimeTuple;
+            ValueTimeTuple* calculated_future_values_list_head = new ValueTimeTuple;
             long last_time = tail->time;// really we should be using UNIX timestamps
             do {
                 calculated_future_values = new ValueTimeTuple;
@@ -73,12 +73,15 @@ class StockRate {
 };
 
 
+// define parse time and parse value
+
 /**
  * Imports for main - will remove as application is built
  */
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
+#include <string>
 using namespace std;
 
 #define EXPECTED_NUMBER_OF_ARGS 2
@@ -92,6 +95,8 @@ int main(int argc, char** argv) {
             "(in this primitive version of the app) were not provided." << endl;
         cout << "Usage: ./stockrate <path to your file>" << endl;
         exit(1);
+    } else { //removey
+        cout << "Great work home slice : " << argv[INPUT_FILE_POS] << endl;
     }
 
     // read in user input 
@@ -101,26 +106,40 @@ int main(int argc, char** argv) {
 
     if (input_file.fail()) {
         cout << "Could not read in " << argv[INPUT_FILE_POS] << endl;
+    } else {//removy
+        cout << "Read that file brah" << endl;
     }
 
-    long time;
-    double price;
-    ValueTimeTuple* current_values_list;
-    while (input_file.good()) {
+    long time = 0;
+    double value = 0.0;
+    ValueTimeTuple* current_values_list = new ValueTimeTuple;
+    string file_line;
+    while (getline(input_file, file_line)) {
         // whatever parsing actually needs to be done here .. do here..
-        input_file >> time >> price;
+        cout << "chugga" << endl;
+        input_file >> file_line; //time >> value;
+        char* split_line = strok(file_line, ",");
+        time = parse_time(split_line);
+        split_line = strok(file_line, ",");
+        value = parse_value(split_line);
+        cout << time << " : " << value << endl;
+        cout << file_line << endl;
         while (current_values_list->next != NULL) {
             current_values_list = current_values_list->next;
         }
         current_values_list = new ValueTimeTuple;
         current_values_list->time = time;
-        current_values_list->value = price;
+        current_values_list->value = value;
     }
 
+
+    cout << "Cory in the house" << endl;
     StockRate* sr = new StockRate(DAYS_IN_A_WEEK);
+    cout << "Cory in the house" << endl;
 
     ValueTimeTuple* potential_future_values_list = sr->rater(current_values_list);
 
+    cout << "Cory in the house" << endl;
     do {
         cout << potential_future_values_list->time << " | " << potential_future_values_list->value << endl;
         potential_future_values_list = potential_future_values_list->next;
