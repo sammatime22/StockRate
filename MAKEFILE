@@ -1,3 +1,4 @@
 # Used to make the StockRater, written in C++
 
-g++ -o stockrate -I header src/stockrate.cpp
+stockrate: 
+	g++ -o stockrate -I header src/stockrate.cpp
