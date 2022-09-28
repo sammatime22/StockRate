@@ -73,7 +73,47 @@ class StockRate {
 };
 
 
-// define parse time and parse value
+/**
+ * Takes a UNIX timestamp and turns it into a string.
+ *
+ * @param time_as_string the string of the UNIX timestamp
+ *
+ * @return a UNIX timestamp of the provided string
+ */
+long parse_time(char* time_as_string) {
+    long time_to_return = 0;
+    while (time_as_string != NULL) {
+        time_to_return = (time_to_return * 10) + (*time_as_string) - 48;
+        time_as_string++;
+    }
+    return time_to_return;
+}
+
+/**
+ * Takes a UNIX timestamp and turns it into a string.
+ *
+ * @param value_as_string the string of the UNIX timestamp
+ *
+ * @return a UNIX timestamp of the provided string
+ */
+double parse_value(char* value_as_string) {
+    double value_to_return = 0.0;
+    bool past_decimal_place = false;
+    double denomenator_for_decimal_conversion = 1.0;
+    while (value_as_string != NULL) {
+        if ((*value_as_string) == ',') {
+            past_decimal_place = true;
+            continue;
+        }
+        value_to_return = (value_to_return * 10) + (*value_as_string) - 48;
+        value_as_string++;
+        if (past_decimal_place) {
+            denomenator_for_decimal_conversion = denomenator_for_decimal_conversion * 10.0;
+        }
+    }
+    return value_to_return / denomenator_for_decimal_conversion;
+}
+
 
 /**
  * Imports for main - will remove as application is built
