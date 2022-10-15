@@ -154,13 +154,15 @@ int main(int argc, char** argv) {
     double value = 0.0;
     ValueTimeTuple* current_values_list = new ValueTimeTuple;
     string file_line;
+    const char* comma = ",";
     while (getline(input_file, file_line)) {
         // whatever parsing actually needs to be done here .. do here..
         cout << "chugga" << endl;
-        input_file >> file_line; //time >> value;
-        char* split_line = strok(file_line, ",");
+        input_file >> file_line; 
+        const char* const_file_line = file_line.c_str();
+        char* split_line = strtok(const_file_line, comma);
         time = parse_time(split_line);
-        split_line = strok(file_line, ",");
+        split_line = strtok(const_file_line, comma);
         value = parse_value(split_line);
         cout << time << " : " << value << endl;
         cout << file_line << endl;
