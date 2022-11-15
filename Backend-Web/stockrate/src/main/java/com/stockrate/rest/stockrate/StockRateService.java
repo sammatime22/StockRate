@@ -10,7 +10,7 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 
 @Service
-public StockRateService {
+public class StockRateService {
 
     private StockDAO stockDao;
 
@@ -24,6 +24,6 @@ public StockRateService {
      * @return all of the stocks within the database
      */
     public List<StockModel> findAllStocks() {
-        return stockDAO.findAllStocks(); 
+        return stockDao.findAllStocks(); 
     }
 }

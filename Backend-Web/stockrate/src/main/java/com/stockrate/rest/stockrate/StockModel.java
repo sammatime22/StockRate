@@ -25,7 +25,7 @@ public class StockModel {
         this.stockAcronym = stockAcronym;
         this.stockPrice = stockPrice;
         this.stockRateOfChange = stockRateOfChange;
-        this.stockRanking = stockRateOfChange;
+        this.stockRanking = stockRanking;
     }
 
 }
