@@ -3,7 +3,7 @@
  *
  * @sammatime22, 2022
  */
-package com.stockrate.rest.stockrate;
+package com.stockrate.rest.stockrate.model;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
@@ -42,4 +42,18 @@ public class StockModel {
         this.stockRanking = stockRanking;
     }
 
+    /**
+     * Returns a string of all of the information within the StockModel object.
+     *
+     * @return a string of all of the information within the StockModel object
+     */
+    public String toString() {
+        return
+            "{stockId: " + stockId +
+            ", stockName: " + stockName +
+            ", acronym: " + acronym +
+            ", price: " + price +
+            ", rateOfChange: " + rateOfChange +
+            ", stockRanking: " + stockRanking + "}";
+    }
 }

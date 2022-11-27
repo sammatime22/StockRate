@@ -3,7 +3,10 @@
  *
  * @sammatime22, 2022
  */
-package com.stockrate.rest.stockrate;
+package com.stockrate.rest.stockrate.controller;
+
+import com.stockrate.rest.stockrate.model.StockModel;
+import com.stockrate.rest.stockrate.service.StockRateService;
 
 import java.util.List;
 

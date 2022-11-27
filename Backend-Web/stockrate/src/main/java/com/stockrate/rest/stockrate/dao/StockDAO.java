@@ -3,7 +3,9 @@
  *
  * @sammatime22
  */
-package com.stockrate.rest.stockrate;
+package com.stockrate.rest.stockrate.dao;
+
+import com.stockrate.rest.stockrate.model.StockModel;
 
 import java.util.List;
 

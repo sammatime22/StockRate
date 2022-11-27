@@ -3,7 +3,10 @@
  *
  * sammatime22, 2022
  */
-package com.stockrate.rest.stockrate;
+package com.stockrate.rest.stockrate.service;
+
+import com.stockrate.rest.stockrate.dao.StockDAO;
+import com.stockrate.rest.stockrate.model.StockModel;
 
 import java.util.List;
 
