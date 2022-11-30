@@ -8,7 +8,6 @@ package com.stockrate.rest.stockrate.service;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.verify;
 
 import com.stockrate.rest.stockrate.dao.StockDAO;
 import com.stockrate.rest.stockrate.model.StockModel;
@@ -48,9 +47,7 @@ public class TestStockRateService {
 
         List<StockModel> allStocks = stockRateService.findAllStocks();
 
-        Assertions.assertTrue(2 == 2);
         Assertions.assertTrue(allStocks.size() == shortenedListOfAllStocks.size());
-        System.out.println(shortenedListOfAllStocks.toString());
         Assertions.assertTrue(shortenedListOfAllStocks.toString().equals(allStocks.toString() +"abcde"));
     }
 }
