@@ -27,6 +27,10 @@ public class StockRateService {
      * @return all of the stocks within the database
      */
     public List<StockModel> findAllStocks() {
-        return stockDao.findAllStocks(); 
+        List<StockModel> stockModels = stockDao.findAllStocks(); 
+        for (StockModel stockModel : stockModels) {
+            System.out.println(stockModel);
+        }
+        return stockModels;
     }
 }

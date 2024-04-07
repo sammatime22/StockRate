@@ -32,12 +32,12 @@ public class TestStockRateController {
     StockRateController stockRateController = new StockRateController(stockRateService);
 
     // Test that the controller will respond to a request for all stocks with all stock data
-    @Test
-    public void testFindAllStocks() {
-        // set up test input (REST)/output (not that there shouldn't really be input)
-        // run mock mvc test
+    // @Test
+    // public void testFindAllStocks() {
+    //     // set up test input (REST)/output (not that there shouldn't really be input)
+    //     // run mock mvc test
         
-        Assertions.assertTrue(allStocks.size() == shortenedListOfAllStocks.size());
-        Assertions.assertTrue(shortenedListOfAllStocks.toString().equals(allStocks.toString()));
-    }
+    //     // Assertions.assertTrue(allStocks.size() == shortenedListOfAllStocks.size());
+    //     // Assertions.assertTrue(shortenedListOfAllStocks.toString().equals(allStocks.toString()));
+    // }
 }

@@ -48,6 +48,6 @@ public class TestStockRateService {
         List<StockModel> allStocks = stockRateService.findAllStocks();
 
         Assertions.assertTrue(allStocks.size() == shortenedListOfAllStocks.size());
-        Assertions.assertTrue(shortenedListOfAllStocks.toString().equals(allStocks.toString() +"abcde"));
+        Assertions.assertTrue(shortenedListOfAllStocks.toString().equals(allStocks.toString()));
     }
 }

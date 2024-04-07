@@ -10,6 +10,8 @@ import com.stockrate.rest.stockrate.service.StockRateService;
 
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,9 +34,9 @@ public class StockRateController {
      *
      * @return all of the stocks within the database
      */
-    @GetMapping(value="/all")
-    List<StockModel> findAllStocks() {
-        return stockRateService.findAllStocks();
+    @GetMapping(value = "/all")
+    public ResponseEntity<List<StockModel>> findAllStocks() {
+        return new ResponseEntity(stockRateService.findAllStocks(), HttpStatus.OK);
     }
 
 }

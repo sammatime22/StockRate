@@ -14,7 +14,7 @@ import org.springframework.data.jpa.repository.Query;
 
 public interface StockDAO extends CrudRepository<StockModel, Long> {
 
-    @Query(value = "SELECT stock FROM Stock stock")
+    @Query(value = "SELECT * FROM STOCK;", nativeQuery = true)
     public List<StockModel> findAllStocks();
 
 }
