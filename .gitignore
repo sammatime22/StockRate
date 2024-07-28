@@ -33,3 +33,6 @@
 
 # Private Migrations
 *private.sql
+
+# Private Properties
+*private.yaml
