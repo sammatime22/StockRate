@@ -17,8 +17,9 @@ CREATE TABLE DATA_SOURCES (
 
 CREATE TABLE COLLECTED_DATA (
     pull_id     BIGINT(20)    NOT NULL AUTO_INCREMENT,
-    pull_date   DATE          NOT NULL,
+    pull_date   TIMESTAMP     NOT NULL DEFAULT(current_timestamp),
     source_id   SMALLINT(5)   NOT NULL,
+    stock_id    SMALLINT(5)   NOT NULL,
     dirty_data  CLOB          NULL,
     PRIMARY KEY(pull_id)
 );
