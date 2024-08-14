@@ -43,6 +43,15 @@ def cleaning_algorithm(dirty_data):
     '''
     clean_data = dirty_data
     # clean my data please!
+    # within the data
+        # there are likely tags that contain numeric currency values
+        # it is possible that there is only one numeric currency value in the content
+            # if this is the case, just grab this
+        # it is also possible that there are multiple currency values and they all have the same class
+            # lets see if this is true
+            # if it is, try to gather nearby tags to make a justified claim on the real value
+                # a disqualifier could include "after hours"
+                # a disqualifier could include nearby content with irrelevant stock names
     price = 0.0
     rate_of_change = 0.0
     return price, rate_of_change
