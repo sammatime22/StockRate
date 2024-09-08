@@ -1,12 +1,14 @@
 # A class used to collect stock data from the web.
 # sammatime22, 2024
-import date
+from bs4 import BeautifulSoup
+from collections import Counter
 import mariadb
+import requests
 import time
 import yaml
 
 # Constants to pull from config file
-CONFIG = "collector-config-private.yaml"
+CONFIG = "/Users/samuelreles/GitHub/StockRate/Data-Collection/collector-config-private.yaml"
 MARIA_DB_CONFIG = "maria_db_config"
 USER = "user"
 PASSWORD = "password"
@@ -21,12 +23,24 @@ HEADERS = requests.utils.default_headers()
 HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'})
 
 # Constants for SQL queries
-GET_COLLECTED_DATA_AT_NEWDAY_FOR_STOCK_ID = "SELECT pull_id, source_id, dirty_data FROM COLLECTED_DATA WHERE stock_id={} AND pull_date > GETDATE();"
+GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > GETDATE();"
 GET_DATA_SOURCES = "SELECT source_location, extension, search_terms FROM DATA_SOURCES;"
 GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
 GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE stock_name=\"{}\";"
 INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA () VALUES ({},{},{},{},{});"
 INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},{});"
+
+# Constants for currencies (currently just USD and JPY)
+DOLLAR = "$"
+YEN = "¥"
+CURRENCIES = [DOLLAR, YEN]
+
+# Other constants
+PERCENT = "%"
+
+# this will be globally kept - the collector probably should be a class but oh well at this time
+value_tag_class = None
+rate_of_change_class = None
 
 def maria_db_factory(user, password, host, port, database):
     '''
@@ -37,32 +51,54 @@ def maria_db_factory(user, password, host, port, database):
     return conn.cursor()
 
 
+def learn_tag_contents(soupy):
+    '''
+    This method determines which tags will have currency values
+    '''
+    example_tag_value = soupy.find_next(lambda tag: DOLLAR in tag.contents)
+    example_tag_rate_of_change = soupy.find_next(lambda tag: PERCENT in tag.contents)
+    return example_tag_value['class'], example_tag_rate_of_change['class']
+
+
+def get_values_seen(value_tags):
+    '''
+    Retrieves all of the values seen within the value tags.
+    '''
+    values = []
+    for value_tag in value_tags:
+        values.push(int(value_tag.value))
+    return values
+
+
 def cleaning_algorithm(dirty_data):
     '''
     Returns cleaned data based on the provided dirty data.
     '''
-    clean_data = dirty_data
+    price = -1.0
+    rate_of_change = -1.0
     # clean my data please!
     # within the data
+    soupy = BeautifulSoup(dirty_data, features='lxml')
+    if value_tag_class == None and rate_of_change_class == None:
         # there are likely tags that contain numeric currency values
-        # it is possible that there is only one numeric currency value in the content
-            # if this is the case, just grab this
-        # it is also possible that there are multiple currency values and they all have the same class
-            # lets see if this is true
-            # if it is, try to gather nearby tags to make a justified claim on the real value
-                # a disqualifier could include "after hours"
-                # a disqualifier could include nearby content with irrelevant stock names
-    price = 0.0
-    rate_of_change = 0.0
+        value_tag_class, rate_of_change_class = learn_tag_contents(soupy)
+    all_value_tags = soupy.find_all(value_tag_class)
+    all_rate_of_change_tags = soupy.find_all(rate_of_change_class)
+    # it is possible that there is only one numeric currency value in the content
+    if len(all_value_tags) > 1:
+        # if this is the case, just grab this
+        price = float(all_value_tags[0].text)
+        rate_of_change = float(all_rate_of_change_tags[0].text)
+    
     return price, rate_of_change
 
 
 if __name__ == '__main__':
     with open(CONFIG, 'r') as collector_config_file:
-        collector_config_config = yaml.safe_load(collector_config)
+        collector_config_config = yaml.safe_load(collector_config_file)
 
     # connect to the DB
-    mariadb_cursor = maria_db_factory()
+    mariadb_cursor = maria_db_factory(collector_config_config["maria_db_config"]["user"], collector_config_config["maria_db_config"]["password"], collector_config_config["maria_db_config"]["host"], collector_config_config["maria_db_config"]["port"], collector_config_config["maria_db_config"]["database"])
 
     # while alive
     while True:
@@ -77,7 +113,8 @@ if __name__ == '__main__':
             for (source_id, source_location, extension, search_terms) in data_sources:
                 # go through all search_terms
                 for search_term in search_terms.split(","):
-                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term)
+                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
+                    time.sleep(AWAIT_TIME) # be polite
                     # place the data into the COLLECTED_DATA
                     mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
                     stock_id = mariadb_cursor.fetchall()
@@ -87,14 +124,20 @@ if __name__ == '__main__':
         # Get every stock ID 
         mariadb_cursor.execute(GET_STOCK_IDS)
         stock_ids = mariadb_cursor.fetchall()
-        
-        # Go through all stock_ids
-        for stock_id in stock_ids:
-            # ...and get data from the past day that we collected
-            mariadb_cursor.execute(GET_COLLECTED_DATA_AT_NEWDAY_FOR_STOCK_ID.format(stock_id))
-            dirty_data_points = mariadb_cursor.fetchall()
+        mariadb_cursor.execute(GET_SOURCE_IDS) 
+        source_ids = mariadb_cursor.fetchall()
 
-            # For all the dirty data, clean it and insert it into the DB
-            for (pull_id, source_id, dirty_data) in dirty_data_points:
+        # Go through all stock_ids
+        #for stock_id in stock_ids:
+        for source_id in source_ids:
+            value_tag_class = None
+            rate_of_change_class = None
+
+            for stock_id in stock_ids:
+                # ...and get data from the past day that we collected
+                mariadb_cursor.execute(GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id, stock_id))
+                pull_id, source_id, dirty_data = mariadb_cursor.fetchall()
+
+                # For the dirty data, clean it and insert it into the DB
                 price, rate_of_change = cleaning_algorithm(dirty_data)
-                mariadb_cursor.execute(CLEANED_DATA.format(stock_id, pull_id, source_id, price, rate_of_change))
+                mariadb_cursor.execute(INSERT_CLEAN_DATA.format(stock_id, pull_id, source_id, price, rate_of_change))
