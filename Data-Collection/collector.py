@@ -12,9 +12,9 @@ CONFIG = "/Users/samuelreles/GitHub/StockRate/Data-Collection/collector-config-p
 MARIA_DB_CONFIG = "maria_db_config"
 USER = "user"
 PASSWORD = "password"
-MARIA_DB_IP = "maria_db_ip"
-MARIA_DB_PORT = "maria_db_port"
-MARIA_DB_DATABASE = "maria_db_database"
+MARIA_DB_IP = "host"
+MARIA_DB_PORT = "port"
+MARIA_DB_DATABASE = "database"
 
 # Constants for operations
 NAP_TIME = 24 * 60 * 60 # 24 hours
@@ -98,12 +98,16 @@ if __name__ == '__main__':
         collector_config_config = yaml.safe_load(collector_config_file)
 
     # connect to the DB
-    mariadb_cursor = maria_db_factory(collector_config_config["maria_db_config"]["user"], collector_config_config["maria_db_config"]["password"], collector_config_config["maria_db_config"]["host"], collector_config_config["maria_db_config"]["port"], collector_config_config["maria_db_config"]["database"])
+    mariadb_cursor = maria_db_factory(collector_config_config[MARIA_DB_CONFIG][USER], \
+        collector_config_config[MARIA_DB_CONFIG][PASSWORD], \
+        collector_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
+        collector_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
+        collector_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
 
     # while alive
     while True:
         # wait for it...
-        time.sleep(NAP_TIME)
+        # time.sleep(NAP_TIME)
 
         # COLLECTION
         # go through all DATA_SOURCES
