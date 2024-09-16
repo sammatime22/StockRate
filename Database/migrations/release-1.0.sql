@@ -6,6 +6,10 @@
 /** Stockrate #10 - Basic Stock Parser */
 use stockrate;
 
+ALTER TABLE STOCK MODIFY COLUMN stock_id SMALLINT(5) NOT NULL AUTO_INCREMENT;
+ALTER TABLE STOCK DROP COLUMN stock_ranking;
+ALTER TABLE STOCK MODIFY COLUMN acronym VARCHAR(30);
+
 CREATE TABLE DATA_SOURCES (
     source_id        SMALLINT(5)    NOT NULL AUTO_INCREMENT,
     source_location  VARCHAR(512)   NOT NULL,
