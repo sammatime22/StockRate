@@ -24,11 +24,11 @@ HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MR
 
 # Constants for SQL queries
 GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > GETDATE();"
-GET_DATA_SOURCES = "SELECT source_location, extension, search_terms FROM DATA_SOURCES;"
+GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms FROM DATA_SOURCES;"
 GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
 GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE stock_name=\"{}\";"
 INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA () VALUES ({},{},{},{},{});"
-INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},{});"
+INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
 
 # Constants for currencies (currently just USD and JPY)
 DOLLAR = "$"
@@ -120,9 +120,13 @@ if __name__ == '__main__':
                     resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
                     time.sleep(AWAIT_TIME) # be polite
                     # place the data into the COLLECTED_DATA
+                    print(search_term)
                     mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
                     stock_id = mariadb_cursor.fetchall()
-                    mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id, resp.content))
+                    if len(stock_id) > 0:
+                        print(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0], resp.content))
+                        mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id, resp.content))
+                        print(str(source_id) + " " + str(stock_id) + str(resp.content))
 
         # CLEANING
         # Get every stock ID 

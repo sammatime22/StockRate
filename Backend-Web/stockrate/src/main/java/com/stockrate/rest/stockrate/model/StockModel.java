@@ -30,20 +30,16 @@ public class StockModel {
     @Column(name = "rate_of_change")
     private float rateOfChange;
 
-    @Column(name = "stock_ranking")
-    private short stockRanking;
-
     public StockModel() {
 
     }
 
-    public StockModel(short stockId, String stockName, String acronym, float price, float rateOfChange, short stockRanking) {
+    public StockModel(short stockId, String stockName, String acronym, float price, float rateOfChange) {
         this.stockId = stockId;
         this.stockName = stockName;
         this.acronym = acronym;
         this.price = price;
         this.rateOfChange = rateOfChange;
-        this.stockRanking = stockRanking;
     }
 
     public short getStockId() {
@@ -66,10 +62,6 @@ public class StockModel {
         return rateOfChange;
     }
 
-    public short getStockRanking() {
-        return stockRanking;
-    }
-
     /**
      * Returns a string of all of the information within the StockModel object.
      *
@@ -81,7 +73,6 @@ public class StockModel {
             ", stockName: " + stockName +
             ", acronym: " + acronym +
             ", price: " + price +
-            ", rateOfChange: " + rateOfChange +
-            ", stockRanking: " + stockRanking + "}";
+            ", rateOfChange: " + rateOfChange + "}";
     }
 }
