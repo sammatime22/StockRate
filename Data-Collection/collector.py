@@ -21,12 +21,13 @@ NAP_TIME = 24 * 60 * 60 # 24 hours
 AWAIT_TIME = 5 # 5s between each pull for stock data
 HEADERS = requests.utils.default_headers()
 HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'})
+ETOUQ = "etouq"
 
 # Constants for SQL queries
 GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > GETDATE();"
 GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms FROM DATA_SOURCES;"
 GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
-GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE stock_name=\"{}\";"
+GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
 INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA () VALUES ({},{},{},{},{});"
 INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
 
@@ -123,10 +124,11 @@ if __name__ == '__main__':
                     print(search_term)
                     mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
                     stock_id = mariadb_cursor.fetchall()
+                    modified_content = str(resp.content).replace('"', ETOUQ)
                     if len(stock_id) > 0:
-                        print(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0], resp.content))
-                        mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id, resp.content))
-                        print(str(source_id) + " " + str(stock_id) + str(resp.content))
+                        print(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
+                        mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
+                        print(str(source_id) + " " + str(stock_id[0][0]) + modified_content)
 
         # CLEANING
         # Get every stock ID 
