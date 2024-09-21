@@ -24,7 +24,7 @@ CREATE TABLE COLLECTED_DATA (
     pull_date   TIMESTAMP     NOT NULL DEFAULT(current_timestamp),
     source_id   SMALLINT(5)   NOT NULL,
     stock_id    SMALLINT(5)   NOT NULL,
-    dirty_data  TEXT          NULL,
+    dirty_data  LONGTEXT      NULL,
     PRIMARY KEY(pull_id)
 );
 
