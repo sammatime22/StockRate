@@ -31,7 +31,7 @@ GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms F
 GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
 GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
 GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
-INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA () VALUES ({},{},{},{},{});"
+INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, source_id, price, rate_of_change) VALUES ({},{},{},{},{});"
 INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
 
 # Constants for currencies (currently just USD and JPY)
@@ -80,8 +80,7 @@ def learn_tag_contents(soupy):
     print(example_tag_rate.attrs)
     print(' '.join(example_tag_rate.attrs['class']))
 
-    raise Exception
-    return None, None
+    return ' '.join(example_tag_value.attrs['class']), ' '.join(example_tag_rate.attrs['class'])
 
 
 def get_values_seen(value_tags):
@@ -110,13 +109,13 @@ def cleaning_algorithm(dirty_data):
     if value_tag_class == None and rate_of_change_class == None:
         # there are likely tags that contain numeric currency values
         value_tag_class, rate_of_change_class = learn_tag_contents(soupy)
-    all_value_tags = soupy.find_all(value_tag_class)
-    all_rate_of_change_tags = soupy.find_all(rate_of_change_class)
+    all_value_tags = soupy.find_all(class_=value_tag_class)
+    all_rate_of_change_tags = soupy.find_all(class_=rate_of_change_class)
     # it is possible that there is only one numeric currency value in the content
     if len(all_value_tags) > 1:
         # if this is the case, just grab this
-        price = float(all_value_tags[0].text)
-        rate_of_change = float(all_rate_of_change_tags[0].text)
+        price = float(all_value_tags[0].text.replace("$",""))
+        rate_of_change = float(all_rate_of_change_tags[0].text.replace("%",""))
     
     return price, rate_of_change
 
@@ -184,7 +183,8 @@ if __name__ == '__main__':
                         # For the dirty data, clean it and insert it into the DB
                         price, rate_of_change = cleaning_algorithm(dirty_data.replace(ETOUQ, '"'))
                         time.sleep(AWAIT_TIME)
-                        mariadb_cursor.execute(INSERT_CLEAN_DATA.format(stock_id, pull_id, source_id, price, rate_of_change))
+                        print(INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
+                        mariadb_cursor.execute(INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
                 except Exception as e:
                     print("hip hop", e)
                     traceback.print_exc()
