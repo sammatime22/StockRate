@@ -10,7 +10,7 @@ import traceback
 import yaml
 
 # Constants to pull from config file
-CONFIG = "/Users/samuelreles/GitHub/StockRate/Data-Collection/collector-config-private.yaml"
+CONFIG = "collector-config-private.yaml"
 MARIA_DB_CONFIG = "maria_db_config"
 USER = "user"
 PASSWORD = "password"
@@ -26,7 +26,7 @@ HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MR
 ETOUQ = "etouq"
 
 # Constants for SQL queries
-GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > SUBDATE(NOW(), 50);"
+GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > SUBDATE(NOW(), 1);"
 GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms FROM DATA_SOURCES WHERE source_id=2;"
 GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
 GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
@@ -59,26 +59,9 @@ def learn_tag_contents(soupy):
     '''
     This method determines which tags will have currency values
     '''
-    #print(str(soupy).index(DOLLAR))
-    #print(str(soupy)[str(soupy).index(DOLLAR):str(soupy).index(DOLLAR)+10])
-    #print(soupy)
-    #example_tag_value = soupy.find_next(lambda tag: DOLLAR in tag.contents)
-    #example_tag_rate_of_change = soupy.find_next(lambda tag: PERCENT in tag.contents)
-    # for item in soupy.find_all('div',string=re.compile("\$\d+(?:\.\d+)?")):
-    #     myitem = item.find_all('div')[-1]
-    #     print(myitem)
-    #     print(myitem.attrs)
-    #     raise Exception
-    
     # return example_tag_value['class'], example_tag_rate_of_change['class']
     example_tag_value = soupy.find_all('div',string=re.compile("\$\d+(?:\.\d+)?"))[0].find_all('div')[-1]
-    print(example_tag_value)
-    print(example_tag_value.attrs)
-    print(' '.join(example_tag_value.attrs['class']))
     example_tag_rate = soupy.find_all('div',string=re.compile("\d+(?:\.\d+)\%?"))[0].find_all('div')[-1]
-    print(example_tag_rate)
-    print(example_tag_rate.attrs)
-    print(' '.join(example_tag_rate.attrs['class']))
 
     return ' '.join(example_tag_value.attrs['class']), ' '.join(example_tag_rate.attrs['class'])
 
@@ -104,8 +87,6 @@ def cleaning_algorithm(dirty_data):
     # clean my data please!
     # within the data
     soupy = BeautifulSoup(dirty_data, features='lxml')
-    #print(dir(soupy))
-    # print(soupy.tagStack)
     if value_tag_class == None and rate_of_change_class == None:
         # there are likely tags that contain numeric currency values
         value_tag_class, rate_of_change_class = learn_tag_contents(soupy)
@@ -134,28 +115,28 @@ if __name__ == '__main__':
     # while alive
     while True:
         # wait for it...
-        # time.sleep(NAP_TIME)
+        time.sleep(NAP_TIME)
 
         # COLLECTION
         # go through all DATA_SOURCES
-        # mariadb_cursor.execute(GET_DATA_SOURCES)
-        # data_sources = mariadb_cursor.fetchall()
-        # if len(data_sources) > 0:
-        #     for (source_id, source_location, extension, search_terms) in data_sources:
-        #         # go through all search_terms
-        #         for search_term in search_terms.split(","):
-        #             print("https://{}/{}/{}".format(source_location, extension, search_term))
-        #             resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
-        #             time.sleep(AWAIT_TIME) # be polite
-        #             # place the data into the COLLECTED_DATA
-        #             print(search_term)
-        #             mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
-        #             stock_id = mariadb_cursor.fetchall()
-        #             modified_content = str(resp.content).replace('"', ETOUQ)
-        #             if len(stock_id) > 0:
-        #                 print(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
-        #                 mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
-        #                 print(str(source_id) + " " + str(stock_id[0][0]) + modified_content)
+        mariadb_cursor.execute(GET_DATA_SOURCES)
+        data_sources = mariadb_cursor.fetchall()
+        if len(data_sources) > 0:
+            for (source_id, source_location, extension, search_terms) in data_sources:
+                # go through all search_terms
+                for search_term in search_terms.split(","):
+                    print("https://{}/{}/{}".format(source_location, extension, search_term))
+                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
+                    time.sleep(AWAIT_TIME) # be polite
+                    # place the data into the COLLECTED_DATA
+                    print(search_term)
+                    mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
+                    stock_id = mariadb_cursor.fetchall()
+                    modified_content = str(resp.content).replace('"', ETOUQ)
+                    if len(stock_id) > 0:
+                        print(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
+                        mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
+                        print(str(source_id) + " " + str(stock_id[0][0]) + modified_content)
 
         # CLEANING
         # Get every stock ID 
@@ -163,7 +144,6 @@ if __name__ == '__main__':
         stock_ids = mariadb_cursor.fetchall()
         mariadb_cursor.execute(GET_SOURCE_IDS) 
         source_ids = mariadb_cursor.fetchall()
-        source_ids.pop(0) # testey
         print(source_ids)
 
         # Go through all stock_ids
@@ -174,7 +154,6 @@ if __name__ == '__main__':
 
             for stock_id in stock_ids:
                 # ...and get data from the past day that we collected
-                # print(GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id[0], stock_id[0]))
                 try:
                     mariadb_cursor.execute(GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id[0], stock_id[0]))
                 
@@ -188,5 +167,3 @@ if __name__ == '__main__':
                 except Exception as e:
                     print("hip hop", e)
                     traceback.print_exc()
-                    # print(str(e))
-                    # print("unable to find collected data for stock_id " + str(stock_id))
