@@ -27,7 +27,7 @@ ETOUQ = "etouq"
 
 # Constants for SQL queries
 GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > SUBDATE(NOW(), 1);"
-GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms FROM DATA_SOURCES WHERE source_id=2;"
+GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms FROM DATA_SOURCES;"
 GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
 GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
 GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
