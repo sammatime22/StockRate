@@ -36,9 +36,9 @@ public class TestStockRateService {
     @Test
     public void testFindAllStocks() {
         List<StockModel> shortenedListOfAllStocks = new ArrayList<>() {{
-                add(new StockModel((short) 0, "Tesla Inc", "TSLA", 204.99f, -0.755f, (short) 1));
-                add(new StockModel((short) 1, "Amazon.com, Inc", "AMZN", 106.90f, -5.0f, (short) 2));
-                add(new StockModel((short) 2, "Apple Inc", "AAPL", 138.38f, -3.22f, (short) 3));
+                add(new StockModel((short) 0, "Tesla Inc", "TSLA", 204.99f, -0.755f));
+                add(new StockModel((short) 1, "Amazon.com, Inc", "AMZN", 106.90f, -5.0f));
+                add(new StockModel((short) 2, "Apple Inc", "AAPL", 138.38f, -3.22f));
             }};
 
         when(

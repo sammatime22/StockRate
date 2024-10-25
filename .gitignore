@@ -30,3 +30,9 @@
 *.exe
 *.out
 *.app
+
+# Private Migrations
+*private.sql
+
+# Private Properties
+*private.yaml
