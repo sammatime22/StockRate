@@ -1,4 +1,4 @@
-# A class used to collect stock data from the web.
+# A program used to collect stock data from the web.
 # sammatime22, 2024
 from bs4 import BeautifulSoup
 from collections import Counter
