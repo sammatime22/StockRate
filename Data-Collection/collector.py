@@ -19,8 +19,7 @@ MARIA_DB_PORT = "port"
 MARIA_DB_DATABASE = "database"
 
 # Constants for operations
-NAP_TIME = 24 * 60 * 60 # 24 hours
-AWAIT_TIME = 5 # 5s between each pull for stock data
+AWAIT_TIME = 90 # 90s between each pull for stock data
 HEADERS = requests.utils.default_headers()
 HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'})
 ETOUQ = "etouq"
@@ -95,8 +94,8 @@ def cleaning_algorithm(dirty_data):
     # it is possible that there is only one numeric currency value in the content
     if len(all_value_tags) > 1:
         # if this is the case, just grab this
-        price = float(all_value_tags[0].text.replace("$",""))
-        rate_of_change = float(all_rate_of_change_tags[0].text.replace("%",""))
+        price = float(all_value_tags[0].text.replace("$","").replace(",",""))
+        rate_of_change = float(all_rate_of_change_tags[0].text.replace("%","").replace(",",""))
     
     return price, rate_of_change
 
@@ -112,58 +111,46 @@ if __name__ == '__main__':
         collector_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
         collector_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
 
-    # while alive
-    while True:
-        # wait for it...
-        time.sleep(NAP_TIME)
+    # COLLECTION
+    # go through all DATA_SOURCES
+    mariadb_cursor.execute(GET_DATA_SOURCES)
+    data_sources = mariadb_cursor.fetchall()
+    if len(data_sources) > 0:
+        for (source_id, source_location, extension, search_terms) in data_sources:
+            # go through all search_terms
+            for search_term in search_terms.split(","):
+                resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
+                time.sleep(AWAIT_TIME) # be polite
+                # place the data into the COLLECTED_DATA
+                mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
+                stock_id = mariadb_cursor.fetchall()
+                modified_content = str(resp.content).replace('"', ETOUQ)
+                if len(stock_id) > 0:
+                    mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
 
-        # COLLECTION
-        # go through all DATA_SOURCES
-        mariadb_cursor.execute(GET_DATA_SOURCES)
-        data_sources = mariadb_cursor.fetchall()
-        if len(data_sources) > 0:
-            for (source_id, source_location, extension, search_terms) in data_sources:
-                # go through all search_terms
-                for search_term in search_terms.split(","):
-                    print("https://{}/{}/{}".format(source_location, extension, search_term))
-                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
-                    time.sleep(AWAIT_TIME) # be polite
-                    # place the data into the COLLECTED_DATA
-                    print(search_term)
-                    mariadb_cursor.execute(GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
-                    stock_id = mariadb_cursor.fetchall()
-                    modified_content = str(resp.content).replace('"', ETOUQ)
-                    if len(stock_id) > 0:
-                        print(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
-                        mariadb_cursor.execute(INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
-                        print(str(source_id) + " " + str(stock_id[0][0]) + modified_content)
+    # CLEANING
+    # Get every stock ID 
+    mariadb_cursor.execute(GET_STOCK_IDS)
+    stock_ids = mariadb_cursor.fetchall()
+    mariadb_cursor.execute(GET_SOURCE_IDS) 
+    source_ids = mariadb_cursor.fetchall()
 
-        # CLEANING
-        # Get every stock ID 
-        mariadb_cursor.execute(GET_STOCK_IDS)
-        stock_ids = mariadb_cursor.fetchall()
-        mariadb_cursor.execute(GET_SOURCE_IDS) 
-        source_ids = mariadb_cursor.fetchall()
-        print(source_ids)
+    # Go through all stock_ids
+    #for stock_id in stock_ids:
+    for source_id in source_ids:
+        value_tag_class = None
+        rate_of_change_class = None
 
-        # Go through all stock_ids
-        #for stock_id in stock_ids:
-        for source_id in source_ids:
-            value_tag_class = None
-            rate_of_change_class = None
-
-            for stock_id in stock_ids:
-                # ...and get data from the past day that we collected
-                try:
-                    mariadb_cursor.execute(GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id[0], stock_id[0]))
-                
-                    collected_data = mariadb_cursor.fetchall()
-                    for (pull_id, dirty_data) in collected_data:
-                        # For the dirty data, clean it and insert it into the DB
-                        price, rate_of_change = cleaning_algorithm(dirty_data.replace(ETOUQ, '"'))
-                        time.sleep(AWAIT_TIME)
-                        print(INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
-                        mariadb_cursor.execute(INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
-                except Exception as e:
-                    print("hip hop", e)
-                    traceback.print_exc()
+        for stock_id in stock_ids:
+            # ...and get data from the past day that we collected
+            try:
+                mariadb_cursor.execute(GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id[0], stock_id[0]))
+            
+                collected_data = mariadb_cursor.fetchall()
+                for (pull_id, dirty_data) in collected_data:
+                    # For the dirty data, clean it and insert it into the DB
+                    price, rate_of_change = cleaning_algorithm(dirty_data.replace(ETOUQ, '"'))
+                    time.sleep(AWAIT_TIME)
+                    mariadb_cursor.execute(INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
+            except Exception as e:
+                print("Error seen during data cleaning", e)

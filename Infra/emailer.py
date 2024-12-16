@@ -4,6 +4,9 @@ import google.generativeai as genai
 import mariadb
 import yagmail
 import yaml
+import time
+import smtplib
+import datetime
 
 # Constants to pull from config file
 CONFIG = "emailer-config-private.yaml"
@@ -15,8 +18,12 @@ MARIA_DB_PORT = "port"
 MARIA_DB_DATABASE = "database"
 GOOGLE_GEMINI_CONFIG = "google_gemini_config"
 MY_KEY = "my_key"
+EMAIL_CONFIG = "email_config"
+ATTACHMENT = "attachment"
+EMAIL_ADDRESS = "email_address"
+OAUTH2_FILE = "oauth2_file"
 
-SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM COLLECTED_DATA ORDER BY pull_id DESC LIMIT {};"
+SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA ORDER BY pull_id DESC LIMIT {};"
 SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
 SELECT_USERS="SELECT email FROM USER;"
 
@@ -45,7 +52,8 @@ def format_findings(findings, mariadb_cursor):
     
     # run calculations on findings, putting this in CSV format
     for key, value in findings_dict.items():
-        stock_of_interest_data = mariadb_cursor.fetchall(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
+        mariadb_cursor.execute(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
+        stock_of_interest_data = mariadb_cursor.fetchall()
         for (stock_name, stock_acronym) in stock_of_interest_data:
             contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
     return contents
@@ -68,39 +76,32 @@ if __name__ == '__main__':
     genai.configure(api_key=emailer_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
     model = genai.GenerativeModel("gemini-1.5-flash")
 
-    # yagmail setup
-    yag = yagmail.SMTP("email")
+    # check and gather the stock data from one pull ago and the most recent pull
+    mariadb_cursor.execute(SELECT_ALL_DATA_FROM_PAST_DAYS.format(LIMIT))
+    data = format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
 
-    while True:
-        # wait a bit
-        time.sleep(NAP_TIME)
+    # ask AI for some insight
+    query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
 
-        # check and gather the stock data from one pull ago and the most recent pull
-        mariadb_cursor.execute(SELECT_ALL_DATA_FROM_PAST_DAYS.format(LIMIT))
-        data = format_findings(mariadb_cursor.fetchall())
+    # put AI response in email
+    ai_response = model.generate_content(query)
 
-        # ask AI for some insight
-        query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
+    # get recipients from DB
+    mariadb_cursor.execute(SELECT_USERS)
+    recipient_list = mariadb_cursor.fetchall()
+    recipients = []
+    for recipient in recipient_list:
+        recipients.append(recipient[0])
 
-        # put AI response in email
-        ai_response = model.generate_content(query)
-
-        # get recipients from DB
-        mariadb_cursor.execute(SELECT_USERS)
-        recipient_list = mariadb_cursor.fetchall()
-        recipients = []
-        for recipient in recipient_list:
-            recipients.append(recipient)
-
-        # put content in .csv
-        with csv_content as open("w", "todaysdata.csv"):
-            csv_content.write(data)
-
-            # sign and deliver
-            yag.send(
-                to=recipients,
-                subject="Todays Stock Data",
-                contents=ai_response,
-                attachments="todaysdata.csv"
-            )
-            csv_content.truncate(0) # erase the data
+    # put content in .csv
+    csv_content = open(emailer_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
+    csv_content.truncate(0) # erase data before writing
+    csv_content.write(data)
+    csv_content.close()
+    yag = yagmail.SMTP(emailer_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=emailer_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+    yag.send(
+        to=recipients,
+        subject="Todays Stock Data " + str(datetime.datetime.now()),
+        contents=ai_response.text,
+        attachments=[emailer_config_config[EMAIL_CONFIG][ATTACHMENT]]
+    )
