@@ -37,3 +37,8 @@ CREATE TABLE CLEANED_DATA (
     rate_of_change  FLOAT(10)    NOT NULL,
     PRIMARY KEY(data_id)
 );
+
+CREATE TABLE USER (
+    email     VARCHAR(512)   NOT NULL,
+    PRIMARY KEY(email)
+);
