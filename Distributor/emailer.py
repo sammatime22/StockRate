@@ -1,12 +1,13 @@
 # A program used to send collected data via email.
 # sammatime22, 2024
+import datetime
 import google.generativeai as genai
 import mariadb
+import smtplib
+import time
+import traceback
 import yagmail
 import yaml
-import time
-import smtplib
-import datetime
 
 # Constants to pull from config file
 CONFIG = "emailer-config-private.yaml"
@@ -42,21 +43,25 @@ def format_findings(findings, mariadb_cursor):
     '''
     Properly formats the data retrieved from the DB into a CSV format
     '''
-    contents = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference\n"
-    findings_dict = {}
-    for (stock_id, price) in findings:
-        # add findings to findings_dict list
-        if findings_dict.get(stock_id) == None:
-            findings_dict[stock_id] = []
-        findings_dict[stock_id].append(price)
-    
-    # run calculations on findings, putting this in CSV format
-    for key, value in findings_dict.items():
-        mariadb_cursor.execute(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
-        stock_of_interest_data = mariadb_cursor.fetchall()
-        for (stock_name, stock_acronym) in stock_of_interest_data:
-            contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
-    return contents
+    try:
+        contents = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference\n"
+        findings_dict = {}
+        for (stock_id, price) in findings:
+            # add findings to findings_dict list
+            if findings_dict.get(stock_id) == None:
+                findings_dict[stock_id] = []
+            findings_dict[stock_id].append(price)
+        
+        # run calculations on findings, putting this in CSV format
+        for key, value in findings_dict.items():
+            mariadb_cursor.execute(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
+            stock_of_interest_data = mariadb_cursor.fetchall()
+            for (stock_name, stock_acronym) in stock_of_interest_data:
+                contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
+        return contents
+    except Exception as e:
+        traceback.print_exc()
+        return None
 
 
 if __name__ == '__main__':
@@ -81,27 +86,47 @@ if __name__ == '__main__':
     data = format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
 
     # ask AI for some insight
-    query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
+    if data is not None:
+        query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
 
-    # put AI response in email
-    ai_response = model.generate_content(query)
+        # put AI response in email
+        ai_response = model.generate_content(query)
 
-    # get recipients from DB
-    mariadb_cursor.execute(SELECT_USERS)
-    recipient_list = mariadb_cursor.fetchall()
-    recipients = []
-    for recipient in recipient_list:
-        recipients.append(recipient[0])
+        # get recipients from DB
+        mariadb_cursor.execute(SELECT_USERS)
+        recipient_list = mariadb_cursor.fetchall()
+        recipients = []
+        for recipient in recipient_list:
+            recipients.append(recipient[0])
 
-    # put content in .csv
-    csv_content = open(emailer_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
-    csv_content.truncate(0) # erase data before writing
-    csv_content.write(data)
-    csv_content.close()
-    yag = yagmail.SMTP(emailer_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=emailer_config_config[EMAIL_CONFIG][OAUTH2_FILE])
-    yag.send(
-        to=recipients,
-        subject="Todays Stock Data " + str(datetime.datetime.now()),
-        contents=ai_response.text,
-        attachments=[emailer_config_config[EMAIL_CONFIG][ATTACHMENT]]
-    )
+        # put content in .csv
+        csv_content = open(emailer_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
+        csv_content.truncate(0) # erase data before writing
+        csv_content.write(data)
+        csv_content.close()
+        yag = yagmail.SMTP(emailer_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=emailer_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+        yag.send(
+            to=recipients,
+            subject="Todays Stock Data " + str(datetime.datetime.now()),
+            contents=ai_response.text,
+            attachments=[emailer_config_config[EMAIL_CONFIG][ATTACHMENT]]
+        )
+    else:
+        query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it?"
+
+        # put AI response in email
+        ai_response = model.generate_content(query)
+
+        # get recipients from DB
+        mariadb_cursor.execute(SELECT_USERS)
+        recipient_list = mariadb_cursor.fetchall()
+        recipients = []
+        for recipient in recipient_list:
+            recipients.append(recipient[0])
+
+        yag = yagmail.SMTP(emailer_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=emailer_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+        yag.send(
+            to=recipients,
+            subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
+            contents=ai_response.text
+        )
