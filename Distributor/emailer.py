@@ -29,7 +29,7 @@ SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock
 SELECT_USERS="SELECT email FROM USER;"
 
 LIMIT = 20 # temp
-
+ 
 def maria_db_factory(user, password, host, port, database):
     '''
     Returns a connection cursor to mariadb
@@ -112,7 +112,7 @@ if __name__ == '__main__':
             attachments=[emailer_config_config[EMAIL_CONFIG][ATTACHMENT]]
         )
     else:
-        query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it?"
+        query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it? Don't provide a date."
 
         # put AI response in email
         ai_response = model.generate_content(query)
