@@ -1,0 +1,2 @@
+0 23 * * * python3 ~/StockRate/Collector/collector.py
+25 3 * * * python3.9 ~/StockRate/Distributor/emailer.py
