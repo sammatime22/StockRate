@@ -1,0 +1,4 @@
+mariadb==1.0.11
+PyYAML==3.12
+google-generativeai==0.2.1
+yagmail==0.3.7

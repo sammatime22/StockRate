@@ -3,7 +3,6 @@
 import datetime
 import google.generativeai as genai
 import mariadb
-import smtplib
 import time
 import traceback
 import yagmail
