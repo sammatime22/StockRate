@@ -9,7 +9,7 @@ import yagmail
 import yaml
 
 # Constants to pull from config file
-CONFIG = "emailer-config-private.yaml"
+CONFIG = "distributor-config-private.yaml"
 MARIA_DB_CONFIG = "maria_db_config"
 USER = "user"
 PASSWORD = "password"
