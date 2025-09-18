@@ -9,7 +9,7 @@ import yagmail
 import yaml
 
 # Constants to pull from config file
-CONFIG = "distributor-config-private.yaml"
+CONFIG = "/distributor-config-private.yaml"
 MARIA_DB_CONFIG = "maria_db_config"
 USER = "user"
 PASSWORD = "password"
@@ -67,17 +67,17 @@ if __name__ == '__main__':
 
     # get config loaded
     with open(CONFIG, 'r') as emailer_config_file:
-        emailer_config_config = yaml.safe_load(emailer_config_file)
+        distributor_config_config = yaml.safe_load(emailer_config_file)
 
     # connect to the DB
-    mariadb_cursor = maria_db_factory(emailer_config_config[MARIA_DB_CONFIG][USER], \
-        emailer_config_config[MARIA_DB_CONFIG][PASSWORD], \
-        emailer_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
-        emailer_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
-        emailer_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
+    mariadb_cursor = maria_db_factory(distributor_config_config[MARIA_DB_CONFIG][USER], \
+        distributor_config_config[MARIA_DB_CONFIG][PASSWORD], \
+        distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
+        distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
+        distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
 
     # Gemini setup
-    genai.configure(api_key=emailer_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
+    genai.configure(api_key=distributor_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
     model = genai.GenerativeModel("gemini-1.5-flash")
 
     # check and gather the stock data from one pull ago and the most recent pull
@@ -99,16 +99,16 @@ if __name__ == '__main__':
             recipients.append(recipient[0])
 
         # put content in .csv
-        csv_content = open(emailer_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
+        csv_content = open(distributor_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
         csv_content.truncate(0) # erase data before writing
         csv_content.write(data)
         csv_content.close()
-        yag = yagmail.SMTP(emailer_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=emailer_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+        yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
         yag.send(
             to=recipients,
             subject="Todays Stock Data " + str(datetime.datetime.now()),
             contents=ai_response.text,
-            attachments=[emailer_config_config[EMAIL_CONFIG][ATTACHMENT]]
+            attachments=[distributor_config_config[EMAIL_CONFIG][ATTACHMENT]]
         )
     else:
         query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it? Don't provide a date."
@@ -123,7 +123,7 @@ if __name__ == '__main__':
         for recipient in recipient_list:
             recipients.append(recipient[0])
 
-        yag = yagmail.SMTP(emailer_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=emailer_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+        yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
         yag.send(
             to=recipients,
             subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
