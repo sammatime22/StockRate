@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: distributor
+spec:
+  containers:
+  - name: distributor
+    image: localhost/distributor:1.0.0
+    imagePullPolicy: IfNotPresent

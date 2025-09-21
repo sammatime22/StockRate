@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: matchadb
+spec:
+  containers:
+  - name: matchadb
+    image: localhost/matchadb:latest
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 8080

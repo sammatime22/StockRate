@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: collector
+spec:
+  containers:
+  - name: collector
+    image: localhost/collector:1.0.0
+    imagePullPolicy: IfNotPresent
