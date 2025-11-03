@@ -7,3 +7,6 @@ spec:
   - name: collector
     image: localhost/collector:1.0.0
     imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        ephemeral-storage: "1Gi"
