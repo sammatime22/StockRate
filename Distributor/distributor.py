@@ -78,7 +78,7 @@ if __name__ == '__main__':
 
     # Gemini setup
     genai.configure(api_key=distributor_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash")
 
     # check and gather the stock data from one pull ago and the most recent pull
     mariadb_cursor.execute(SELECT_ALL_DATA_FROM_PAST_DAYS.format(LIMIT))
