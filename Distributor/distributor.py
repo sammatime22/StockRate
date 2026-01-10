@@ -89,7 +89,12 @@ if __name__ == '__main__':
         query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
 
         # put AI response in email
-        ai_response = model.generate_content(query)
+        ai_response = None
+        try:
+            ai_response = model.generate_content(query)
+        except Exception as e:
+            ai_response = "An error occurred in querying the AI agent."
+            traceback.print_exc()
 
         # get recipients from DB
         mariadb_cursor.execute(SELECT_USERS)
