@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: activemq
+spec:
+  containers:
+  - name: activemq
+    image: activemq:latest
+    ports:
+    - containerPort: 61616
+    env:
+    - name: ACTIVEMQ_USERNAME
+      value: ....
+    - name: ACTIVEMQ_PASSWORD
+      value: ....

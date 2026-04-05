@@ -33,3 +33,9 @@
 
 # Private Files
 *private*
+
+# Logs
+*.log
+
+# PYC
+*.pyc
