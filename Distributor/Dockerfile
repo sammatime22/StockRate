@@ -1,8 +1,6 @@
 FROM python:3.9-slim
 COPY distributor.py /
 RUN chmod +0011 /distributor.py
-COPY distributor-config-private.yaml /
-COPY tkn-private.json /
 RUN apt update && apt install -y cron
 RUN apt install -y gcc
 RUN apt install -y build-essential
