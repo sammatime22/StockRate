@@ -1,4 +1,4 @@
-FROM factory:latest
+FROM ghcr.io/sammatime22/stockrate/factory:latest
 COPY orchestrator.py /
 RUN chmod +0011 /orchestrator.py
 COPY requirements.txt .
