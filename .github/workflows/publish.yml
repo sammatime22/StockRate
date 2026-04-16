@@ -19,14 +19,14 @@ jobs:
       - name: Build Docker Images for All StockRate Projects
         run: |
           cd Collector
-          docker build . -t ghcr.io/sammatime22/Stockrate/collector:latest
-          docker push ghcr.io/sammatime22/Stockrate/collector:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/collector:latest
+          docker push ghcr.io/sammatime22/stockrate/collector:latest
           cd ../Distributor
-          docker build . -t ghcr.io/sammatime22/Stockrate/distributor:latest
-          docker push ghcr.io/sammatime22/Stockrate/distributor:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/distributor:latest
+          docker push ghcr.io/sammatime22/stockrate/distributor:latest
           cd ../Factory
-          docker build . -t ghcr.io/sammatime22/Stockrate/factory:latest
-          docker push ghcr.io/sammatime22/Stockrate/factory:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/factory:latest
+          docker push ghcr.io/sammatime22/stockrate/factory:latest
           cd ../Orchestrator
-          docker build . -t ghcr.io/sammatime22/Stockrate/orchestrator:latest
-          docker push ghcr.io/sammatime22/Stockrate/orchestrator:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/orchestrator:latest
+          docker push ghcr.io/sammatime22/stockrate/orchestrator:latest
