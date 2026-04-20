@@ -1,12 +1,21 @@
 apiVersion: v1
 kind: Pod
-metadata: 
+metadata:
   name: orchestrator
 spec:
+  imagePullSecrets:
+  - name: ghcr-secret
   containers:
   - name: orchestrator
-    image: localhost/orchestrator:1.0.0
-    imagePullPolicy: IfNotPresent
+    image: ghcr.io/sammatime22/stockrate/orchestrator:latest
+    imagePullPolicy: Always
     resources:
       limits:
         ephemeral-storage: "1Gi"
+    volumeMounts:
+      - name: config-volume
+        mountPath: /config-dir
+  volumes:
+    - name: config-volume
+      configMap:
+        name: orchestrator-config
