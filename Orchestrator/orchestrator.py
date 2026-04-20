@@ -159,7 +159,7 @@ class Orchestrator(stomp.ConnectionListener):
             self.logger.info("I am alive")
 
 
-ORCHESTRATOR_CONFIG = "/orchestrator-config-private.yaml"
+ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
 MATCHA_DB_URL = "matcha_db_url"
 ORCHESTRATOR_ID = 12345
 
