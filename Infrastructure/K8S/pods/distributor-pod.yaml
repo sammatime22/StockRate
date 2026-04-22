@@ -3,10 +3,19 @@ kind: Pod
 metadata:
   name: distributor
 spec:
+  imagePullSecrets:
+  - name: ghcr-secret
   containers:
   - name: distributor
-    image: localhost/distributor:1.0.0
-    imagePullPolicy: IfNotPresent
+    image: ghcr.io/sammatime22/stockrate/distributor:latest
+    imagePullPolicy: Always
     resources:
       limits:
         ephemeral-storage: "1Gi"
+    volumeMounts:
+      - name: config-volume
+        mountPath: /config-dir
+  volumes:
+    - name: config-volume
+      configMap:
+        name: distributor-config

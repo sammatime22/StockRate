@@ -1,0 +1,32 @@
+name: Publish Containers
+on: 
+  push:
+    tags:
+      - 'latest'
+
+
+jobs:
+  publish-containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Docker Images for All StockRate Projects
+        run: |
+          cd Collector
+          docker build . -t ghcr.io/sammatime22/stockrate/collector:latest
+          docker push ghcr.io/sammatime22/stockrate/collector:latest
+          cd ../Distributor
+          docker build . -t ghcr.io/sammatime22/stockrate/distributor:latest
+          docker push ghcr.io/sammatime22/stockrate/distributor:latest
+          cd ../Factory
+          docker build . -t ghcr.io/sammatime22/stockrate/factory:latest
+          docker push ghcr.io/sammatime22/stockrate/factory:latest
+          cd ../Orchestrator
+          docker build . -t ghcr.io/sammatime22/stockrate/orchestrator:latest
+          docker push ghcr.io/sammatime22/stockrate/orchestrator:latest

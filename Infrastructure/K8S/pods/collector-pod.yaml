@@ -3,10 +3,19 @@ kind: Pod
 metadata:
   name: collector
 spec:
+  imagePullSecrets:
+  - name: ghcr-secret
   containers:
   - name: collector
-    image: localhost/collector:1.0.0
-    imagePullPolicy: IfNotPresent
+    image: ghcr.io/sammatime22/stockrate/collector:latest
+    imagePullPolicy: Always
     resources:
       limits:
         ephemeral-storage: "1Gi"
+    volumeMounts:
+      - name: config-volume
+        mountPath: /config-dir
+  volumes:
+    - name: config-volume
+      configMap:
+        name: collector-config
