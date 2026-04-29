@@ -14,6 +14,10 @@ import sys
 import yaml
 from factory import stomp_factory
 
+# Constants for Orchestrator
+ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
+MATCHA_DB_URL = "matcha_db_url"
+ORCHESTRATOR_ID = 12345
 
 class Orchestrator(stomp.ConnectionListener):
     '''
@@ -158,10 +162,6 @@ class Orchestrator(stomp.ConnectionListener):
             time.sleep(self.WAIT_TIME)
             self.logger.info("I am alive")
 
-
-ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
-MATCHA_DB_URL = "matcha_db_url"
-ORCHESTRATOR_ID = 12345
 
 # Orchestrator Setup
 with open(ORCHESTRATOR_CONFIG, "r") as orchestrator_config_file:
