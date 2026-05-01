@@ -55,7 +55,6 @@ class Collector(stomp.ConnectionListener):
         '''
         whatever we need to initialize this
         '''
-        # consider initializing the maria db stuff? and stomp?
         pass
 
 
@@ -195,7 +194,7 @@ class Collector(stomp.ConnectionListener):
         message: the message received
         '''
         conduct_collection()
-        self.stomp_connection.send("/collector", {"collection_stop": datetime.datetime.now().timestamp()})
+        self.stomp_connection.send("/collection", {"collection_stop": datetime.datetime.now().timestamp()})
 
 
     def set_stomp_connection(self, stomp_connection):
@@ -222,7 +221,7 @@ COLLECTOR_ID = 26553
 COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
 with open(COLLECTOR_CONFIG, "r") as collector_config_file:
     collector_config = yaml.safe_load(collector_config_file)
-    collector = Collector() #probably want to pass stuff in...
+    collector = Collector() 
     stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
     collector_thread = threading.Thread(target=collector.main_loop)
 

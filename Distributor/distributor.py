@@ -3,135 +3,193 @@
 import datetime
 import google.generativeai as genai
 import mariadb
+import stomp
+import threading
 import time
 import traceback
 import yagmail
 import yaml
+from factory import stomp_factory
 
-# Constants to pull from config file
-CONFIG = "/config-dir/distributor-config-private.yaml"
-MARIA_DB_CONFIG = "maria_db_config"
-USER = "user"
-PASSWORD = "password"
-MARIA_DB_IP = "host"
-MARIA_DB_PORT = "port"
-MARIA_DB_DATABASE = "database"
-GOOGLE_GEMINI_CONFIG = "google_gemini_config"
-MY_KEY = "my_key"
-EMAIL_CONFIG = "email_config"
-ATTACHMENT = "attachment"
-EMAIL_ADDRESS = "email_address"
-OAUTH2_FILE = "oauth2_file"
+class Distributor(stomp.ConnectionListener):
 
-SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA ORDER BY pull_id DESC LIMIT {};"
-SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
-SELECT_USERS="SELECT email FROM USER;"
+    # Constants to pull from config file
+    MARIA_DB_CONFIG = "maria_db_config"
+    USER = "user"
+    PASSWORD = "password"
+    MARIA_DB_IP = "host"
+    MARIA_DB_PORT = "port"
+    MARIA_DB_DATABASE = "database"
+    GOOGLE_GEMINI_CONFIG = "google_gemini_config"
+    MY_KEY = "my_key"
+    EMAIL_CONFIG = "email_config"
+    ATTACHMENT = "attachment"
+    EMAIL_ADDRESS = "email_address"
+    OAUTH2_FILE = "oauth2_file"
 
-LIMIT = 20 # temp
+    SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA ORDER BY pull_id DESC LIMIT {};"
+    SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
+    SELECT_USERS="SELECT email FROM USER;"
+
+    LIMIT = 20 # temp
  
-def maria_db_factory(user, password, host, port, database):
-    '''
-    Returns a connection cursor to mariadb
-    '''
-    conn = mariadb.connect(user=user, password=password, host=host, port=port, database=database)
-    conn.autocommit = True
-    return conn.cursor()
+    def __init__(self):
+        '''
+        Whatever we need to initialize this
+        '''
+        pass
 
 
-def format_findings(findings, mariadb_cursor):
-    '''
-    Properly formats the data retrieved from the DB into a CSV format
-    '''
-    try:
-        contents = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference\n"
-        findings_dict = {}
-        for (stock_id, price) in findings:
-            # add findings to findings_dict list
-            if findings_dict.get(stock_id) == None:
-                findings_dict[stock_id] = []
-            findings_dict[stock_id].append(price)
-        
-        # run calculations on findings, putting this in CSV format
-        for key, value in findings_dict.items():
-            mariadb_cursor.execute(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
-            stock_of_interest_data = mariadb_cursor.fetchall()
-            for (stock_name, stock_acronym) in stock_of_interest_data:
-                contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
-        return contents
-    except Exception as e:
-        traceback.print_exc()
-        return None
+    def maria_db_factory(user, password, host, port, database):
+        '''
+        Returns a connection cursor to mariadb
+        '''
+        conn = mariadb.connect(user=user, password=password, host=host, port=port, database=database)
+        conn.autocommit = True
+        return conn.cursor()
 
 
-if __name__ == '__main__':
-
-    # get config loaded
-    with open(CONFIG, 'r') as emailer_config_file:
-        distributor_config_config = yaml.safe_load(emailer_config_file)
-
-    # connect to the DB
-    mariadb_cursor = maria_db_factory(distributor_config_config[MARIA_DB_CONFIG][USER], \
-        distributor_config_config[MARIA_DB_CONFIG][PASSWORD], \
-        distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
-        distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
-        distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
-
-    # Gemini setup
-    genai.configure(api_key=distributor_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
-    model = genai.GenerativeModel("gemini-2.0-flash")
-
-    # check and gather the stock data from one pull ago and the most recent pull
-    mariadb_cursor.execute(SELECT_ALL_DATA_FROM_PAST_DAYS.format(LIMIT))
-    data = format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
-
-    # ask AI for some insight
-    if data is not None:
-        query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
-
-        # put AI response in email
-        ai_response = None
+    def format_findings(findings, mariadb_cursor):
+        '''
+        Properly formats the data retrieved from the DB into a CSV format
+        '''
         try:
-            ai_response = model.generate_content(query)
-            ai_response = ai_response.text
+            contents = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference\n"
+            findings_dict = {}
+            for (stock_id, price) in findings:
+                # add findings to findings_dict list
+                if findings_dict.get(stock_id) == None:
+                    findings_dict[stock_id] = []
+                findings_dict[stock_id].append(price)
+            
+            # run calculations on findings, putting this in CSV format
+            for key, value in findings_dict.items():
+                mariadb_cursor.execute(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
+                stock_of_interest_data = mariadb_cursor.fetchall()
+                for (stock_name, stock_acronym) in stock_of_interest_data:
+                    contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
+            return contents
         except Exception as e:
-            ai_response = "An error occurred in querying the AI agent."
             traceback.print_exc()
+            return None
 
-        # get recipients from DB
-        mariadb_cursor.execute(SELECT_USERS)
-        recipient_list = mariadb_cursor.fetchall()
-        recipients = []
-        for recipient in recipient_list:
-            recipients.append(recipient[0])
 
-        # put content in .csv
-        csv_content = open(distributor_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
-        csv_content.truncate(0) # erase data before writing
-        csv_content.write(data)
-        csv_content.close()
-        yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
-        yag.send(
-            to=recipients,
-            subject="Todays Stock Data " + str(datetime.datetime.now()),
-            contents=ai_response,
-            attachments=[distributor_config_config[EMAIL_CONFIG][ATTACHMENT]]
-        )
-    else:
-        query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it? Don't provide a date."
+    def conduct_distribution():
+        '''
+        The main thread to conduct the distribution
+        '''
+        # get config loaded
+        with open(CONFIG, 'r') as emailer_config_file:
+            distributor_config_config = yaml.safe_load(emailer_config_file)
 
-        # put AI response in email
-        ai_response = model.generate_content(query)
+        # connect to the DB
+        mariadb_cursor = maria_db_factory(distributor_config_config[MARIA_DB_CONFIG][USER], \
+            distributor_config_config[MARIA_DB_CONFIG][PASSWORD], \
+            distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
+            distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
+            distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
 
-        # get recipients from DB
-        mariadb_cursor.execute(SELECT_USERS)
-        recipient_list = mariadb_cursor.fetchall()
-        recipients = []
-        for recipient in recipient_list:
-            recipients.append(recipient[0])
+        # Gemini setup
+        genai.configure(api_key=distributor_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
+        model = genai.GenerativeModel("gemini-2.0-flash")
 
-        yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
-        yag.send(
-            to=recipients,
-            subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
-            contents=ai_response.text
-        )
+        # check and gather the stock data from one pull ago and the most recent pull
+        mariadb_cursor.execute(SELECT_ALL_DATA_FROM_PAST_DAYS.format(LIMIT))
+        data = format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
+
+        # ask AI for some insight
+        if data is not None:
+            query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
+
+            # put AI response in email
+            ai_response = None
+            try:
+                ai_response = model.generate_content(query)
+                ai_response = ai_response.text
+            except Exception as e:
+                ai_response = "An error occurred in querying the AI agent."
+                traceback.print_exc()
+
+            # get recipients from DB
+            mariadb_cursor.execute(SELECT_USERS)
+            recipient_list = mariadb_cursor.fetchall()
+            recipients = []
+            for recipient in recipient_list:
+                recipients.append(recipient[0])
+
+            # put content in .csv
+            csv_content = open(distributor_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
+            csv_content.truncate(0) # erase data before writing
+            csv_content.write(data)
+            csv_content.close()
+            yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+            yag.send(
+                to=recipients,
+                subject="Todays Stock Data " + str(datetime.datetime.now()),
+                contents=ai_response,
+                attachments=[distributor_config_config[EMAIL_CONFIG][ATTACHMENT]]
+            )
+        else:
+            query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it? Don't provide a date."
+
+            # put AI response in email
+            ai_response = model.generate_content(query)
+
+            # get recipients from DB
+            mariadb_cursor.execute(SELECT_USERS)
+            recipient_list = mariadb_cursor.fetchall()
+            recipients = []
+            for recipient in recipient_list:
+                recipients.append(recipient[0])
+
+            yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+            yag.send(
+                to=recipients,
+                subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
+                contents=ai_response.text
+            )
+
+
+    def on_message(self, headers, message):
+        '''
+        Collects messages for the Distributor.
+
+        Parameters:
+        -----------
+        headers: the headers of the message received
+        message: the message received
+        '''
+        conduct_distribution()
+        self.stomp_connection.send("/distribution", {"distribution_stop": datetime.datetime.now().timestamp()})
+
+
+    def set_stomp_connection(self, stomp_connection):
+        '''
+        Sets the Distributor's STOMP connection.
+
+        Parameters:
+        -----------
+        stomp_connection: the STOMP connection to set for the Distributor
+        '''
+        self.stomp_connection = stomp_connection
+
+
+    def main_loop(self):
+        '''
+        Keeps the Distributor alive
+        '''
+        while True:
+            time.sleep(10)
+            print("I am alive")
+
+# Distributor Setup
+DISTRIBUTOR_ID = 34787
+DISTRIBUTOR_CONFIG = "/config-dir/distributor-config-private.yaml"
+with open(DISTRIBUTOR_CONFIG, "r") as distributor_config_file:
+    distributor_config = yaml.safe_load(distributor_config_file)
+    distributor = Distributor()
+    stomp_factory(distributor, DISTRIBUTOR_ID, distributor_config["stomp_config"])
+    distributor_thread = threading.Thread(target=distributor.main_loop)
+
+    # Starting Distributor
+    distributor_thread.start()
