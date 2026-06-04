@@ -1,7 +1,12 @@
 # A program used to send collected data via email.
 # sammatime22, 2024
+from factory import stomp_factory
+from logging.handlers import RotatingFileHandler
+import asyncio
 import datetime
 import google.generativeai as genai
+import json
+import logging
 import mariadb
 import stomp
 import threading
@@ -9,7 +14,6 @@ import time
 import traceback
 import yagmail
 import yaml
-from factory import stomp_factory
 
 class Distributor(stomp.ConnectionListener):
 
@@ -27,17 +31,55 @@ class Distributor(stomp.ConnectionListener):
     EMAIL_ADDRESS = "email_address"
     OAUTH2_FILE = "oauth2_file"
 
+    # Constants for operations
+    LIMIT = 20 # temp
+
+    # Constants for SQL queries
     SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA ORDER BY pull_id DESC LIMIT {};"
     SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
     SELECT_USERS="SELECT email FROM USER;"
-
-    LIMIT = 20 # temp
  
-    def __init__(self):
+    # Logging
+    logger = None
+    handler = RotatingFileHandler(
+        'distributor.log',
+        maxBytes = 2_000_000,
+        backupCount = 1
+    )
+
+    # STOMP stuff
+    stomp_connection = None
+
+    # Whether we are actively distributing or not
+    active = False
+
+    # For the asyncio loop
+    loop = None
+    thread = None
+
+    def __init__(self, distributor_config):
         '''
-        Whatever we need to initialize this
+        The initializer for the Distributor.
+
+        This initializes an asyncio loop for the Distributor, separating the distribution process from the STOMP listener.
+
+        Parameters:
+        -----------
+        distributor_config: The configuration for the Distributor's MariaDB connection, GenAI connection, and email connection.
         '''
-        pass
+        self.CONFIG = distributor_config
+
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
+
+        self.logger = logging.getLogger()
+        self.logger.addHandler(self.handler)
+        self.logger.setLevel(logging.INFO)
+
+        # Startup Message
+        self.logger.info("Distributor started at {}".format(datetime.datetime.now().timestamp()))
+        self.logger.info("Distributor configuration: {}".format(distributor_config))
 
 
     def maria_db_factory(user, password, host, port, database):
@@ -74,13 +116,14 @@ class Distributor(stomp.ConnectionListener):
             return None
 
 
-    def conduct_distribution():
+    async def conduct_distribution(self):
         '''
         The main thread to conduct the distribution
         '''
         # get config loaded
-        with open(CONFIG, 'r') as emailer_config_file:
-            distributor_config_config = yaml.safe_load(emailer_config_file)
+        distributor_config_config = self.CONFIG
+
+        self.logger.info("Distributor configuration: {}".format(distributor_config_config))
 
         # connect to the DB
         mariadb_cursor = maria_db_factory(distributor_config_config[MARIA_DB_CONFIG][USER], \
@@ -88,6 +131,7 @@ class Distributor(stomp.ConnectionListener):
             distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
             distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
             distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
+        self.logger.info("Connected to MariaDB at {}".format(datetime.datetime.now().timestamp()))
 
         # Gemini setup
         genai.configure(api_key=distributor_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
@@ -99,6 +143,7 @@ class Distributor(stomp.ConnectionListener):
 
         # ask AI for some insight
         if data is not None:
+            self.logger.info("Data could be pulled, and we will attempt to query the AI agent for insights at {}".format(datetime.datetime.now().timestamp()))
             query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
 
             # put AI response in email
@@ -130,10 +175,17 @@ class Distributor(stomp.ConnectionListener):
                 attachments=[distributor_config_config[EMAIL_CONFIG][ATTACHMENT]]
             )
         else:
+            self.logger.info("Data could not be pulled, and we will request an apology statement from the AI agent at {}".format(datetime.datetime.now().timestamp()))
             query = "Can you write an apology statement saying the data pipeline had an issue developing today's results, and we are working to fix it? Don't provide a date."
 
             # put AI response in email
-            ai_response = model.generate_content(query)
+            ai_response = None
+            try:
+                ai_response = model.generate_content(query)
+                ai_response = ai_response.text
+            except Exception as e:
+                ai_response = "An error occurred in querying the AI agent."
+                traceback.print_exc()
 
             # get recipients from DB
             mariadb_cursor.execute(SELECT_USERS)
@@ -148,9 +200,12 @@ class Distributor(stomp.ConnectionListener):
                 subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
                 contents=ai_response.text
             )
+        self.stomp_connection.send("/topic/distribution-reply", json.dumps({"distribution_stop": datetime.datetime.now().timestamp()}))
+        self.active = False
+        self.logger.info("Finished distribution at {}".format(datetime.datetime.now().timestamp()))
 
 
-    def on_message(self, headers, message):
+    def on_message(self, message):
         '''
         Collects messages for the Distributor.
 
@@ -159,8 +214,11 @@ class Distributor(stomp.ConnectionListener):
         headers: the headers of the message received
         message: the message received
         '''
-        conduct_distribution()
-        self.stomp_connection.send("/distribution", {"distribution_stop": datetime.datetime.now().timestamp()})
+        if not self.active:
+            self.active = True
+            asyncio.run_coroutine_threadsafe(self.conduct_distribution(), self.loop)
+        else:
+            self.logger.warning("Already active, ignoring message")
 
 
     def set_stomp_connection(self, stomp_connection):
@@ -180,14 +238,14 @@ class Distributor(stomp.ConnectionListener):
         '''
         while True:
             time.sleep(10)
-            print("I am alive")
+            self.logger.info("Distributor is alive at {}".format(datetime.datetime.now().timestamp()))
 
 # Distributor Setup
 DISTRIBUTOR_ID = 34787
-DISTRIBUTOR_CONFIG = "/config-dir/distributor-config-private.yaml"
+DISTRIBUTOR_CONFIG = "distributor-config-private.yaml"
 with open(DISTRIBUTOR_CONFIG, "r") as distributor_config_file:
     distributor_config = yaml.safe_load(distributor_config_file)
-    distributor = Distributor()
+    distributor = Distributor(distributor_config)
     stomp_factory(distributor, DISTRIBUTOR_ID, distributor_config["stomp_config"])
     distributor_thread = threading.Thread(target=distributor.main_loop)
 
