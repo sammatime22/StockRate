@@ -14,7 +14,10 @@ import sys
 import time
 import threading
 import yaml
-
+# Ensure yaml library works as intended in future Python versions
+import collections
+import collections.abc
+collections.Hashable = collections.abc.Hashable
 
 class Orchestrator(stomp.ConnectionListener):
     '''

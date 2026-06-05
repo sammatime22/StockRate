@@ -14,6 +14,11 @@ import time
 import traceback
 import yagmail
 import yaml
+# Ensure yaml library works as intended in future Python versions
+import collections
+import collections.abc
+collections.Hashable = collections.abc.Hashable
+
 
 class Distributor(stomp.ConnectionListener):
 
