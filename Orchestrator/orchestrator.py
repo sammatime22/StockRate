@@ -189,7 +189,7 @@ class Orchestrator(stomp.ConnectionListener):
 
 # Orchestrator Setup
 ORCHESTRATOR_ID = 12345
-ORCHESTRATOR_CONFIG = "orchestrator-config-private.yaml"
+ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
 with open(ORCHESTRATOR_CONFIG, "r") as orchestrator_config_file:
     orchestrator_config = yaml.safe_load(orchestrator_config_file)
     orchestrator = Orchestrator(orchestrator_config["matcha_db_url"])

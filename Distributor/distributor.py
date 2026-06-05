@@ -242,7 +242,7 @@ class Distributor(stomp.ConnectionListener):
 
 # Distributor Setup
 DISTRIBUTOR_ID = 34787
-DISTRIBUTOR_CONFIG = "distributor-config-private.yaml"
+DISTRIBUTOR_CONFIG = "/config-dir/distributor-config-private.yaml"
 with open(DISTRIBUTOR_CONFIG, "r") as distributor_config_file:
     distributor_config = yaml.safe_load(distributor_config_file)
     distributor = Distributor(distributor_config)

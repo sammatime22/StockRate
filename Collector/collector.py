@@ -277,7 +277,7 @@ class Collector(stomp.ConnectionListener):
 
 # Collector Setup
 COLLECTOR_ID = 26553
-COLLECTOR_CONFIG = "collector-config-private.yaml"
+COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
 with open(COLLECTOR_CONFIG, "r") as collector_config_file:
     collector_config = yaml.safe_load(collector_config_file)
     collector = Collector(collector_config) 
