@@ -174,7 +174,7 @@ class Orchestrator(stomp.ConnectionListener):
                 if self.current_state == self.OrchestratorState.AWAITING:
                     # do stuff
                     self.stats_to_post = {"timestamp": datetime.datetime.now(), "stats": {}}
-                    self.logger.info(""self.stats_to_post)
+                    self.logger.info(self.stats_to_post)
                     collection_start = datetime.datetime.now().timestamp()
                     self.logger.info(collection_start)
                     self.stomp_connection.send("/topic/collection-request", self.COLLECTION_REQUEST.format(int(collection_start)))
