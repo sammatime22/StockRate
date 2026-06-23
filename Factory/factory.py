@@ -2,7 +2,7 @@
 # sammatime22, 2026
 import stomp
 
-HB_INTERVAL = 10000
+HB_INTERVAL = 0
 IP = "ip"
 PORT = "port"
 USERNAME = "username"
