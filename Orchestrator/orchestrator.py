@@ -58,13 +58,15 @@ class Orchestrator(stomp.ConnectionListener):
     loop = None
     thread = None
 
-    def __init__(self, matchadb_url):
+    def __init__(self, matchadb_url, start_time_hour=0, start_time_minute=0):
         '''
         The initializer for the Orchestrator.
 
         Parameters:
         -----------
         matchadb_url: the URL of the MatchaDB instance to post updates to
+        start_time_hour: the hour at which to start the orchestrator
+        start_time_minute: the minute at which to start the orchestrator
         '''
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
@@ -76,6 +78,8 @@ class Orchestrator(stomp.ConnectionListener):
         self.logger.setLevel(logging.INFO)
 
         self.matchadb_url = matchadb_url
+
+        self.SEND_TIME = start_time_hour * 60 + start_time_minute
 
 
     def matcha_db_post(self, updates_to_post):
@@ -195,7 +199,7 @@ ORCHESTRATOR_ID = 12345
 ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
 with open(ORCHESTRATOR_CONFIG, "r") as orchestrator_config_file:
     orchestrator_config = yaml.safe_load(orchestrator_config_file)
-    orchestrator = Orchestrator(orchestrator_config["matcha_db_url"])
+    orchestrator = Orchestrator(orchestrator_config["matcha_db_url"], orchestrator_config["kickoff"]["start_time_hour"], orchestrator_config["kickoff"]["start_time_minute"])
     stomp_factory(orchestrator, ORCHESTRATOR_ID, orchestrator_config["stomp_config"])
     orchestrator_thread = threading.Thread(target=orchestrator.main_loop)
 
