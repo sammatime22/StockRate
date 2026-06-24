@@ -187,11 +187,8 @@ class Orchestrator(stomp.ConnectionListener):
                     self.current_state = self.OrchestratorState.AMID_COLLECTION
                 else:
                     self.logger.info("something could be wrong..")
-            else:
-                self.logger.info("The time is recorded as {:02}:{}z - awaiting {:02}:{}z".format(current_time_mins // 60, current_time_mins % 60, self.SEND_TIME // 60, self.SEND_TIME % 60))
             # await the "wait time"
             time.sleep(self.WAIT_TIME)
-            self.logger.info("I am alive")
 
 
 # Orchestrator Setup

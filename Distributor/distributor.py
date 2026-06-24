@@ -243,7 +243,7 @@ class Distributor(stomp.ConnectionListener):
         '''
         while True:
             time.sleep(10)
-            self.logger.info("Distributor is alive at {}".format(datetime.datetime.now().timestamp()))
+
 
 # Distributor Setup
 DISTRIBUTOR_ID = 34787
