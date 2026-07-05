@@ -251,11 +251,14 @@ class Collector(stomp.ConnectionListener):
         headers: the headers of the message received
         message: the message received
         '''
-        if not self.active:
-            self.active = True
-            asyncio.run_coroutine_threadsafe(self.conduct_collection(), self.loop)
-        else:
-            self.logger.warning("Already active, ignoring message")
+        try:
+            if not self.active:
+                self.active = True
+                asyncio.run_coroutine_threadsafe(self.conduct_collection(), self.loop)
+            else:
+                self.logger.warning("Already active, ignoring message")
+        except Exception as e:
+            self.logger.error("Catching exception, {}". format(e))
 
 
     def set_stomp_connection(self, stomp_connection):

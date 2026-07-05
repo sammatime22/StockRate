@@ -96,7 +96,7 @@ class Distributor(stomp.ConnectionListener):
         return conn.cursor()
 
 
-    def format_findings(findings, mariadb_cursor):
+    def format_findings(self, findings, mariadb_cursor):
         '''
         Properly formats the data retrieved from the DB into a CSV format
         '''
@@ -111,7 +111,7 @@ class Distributor(stomp.ConnectionListener):
             
             # run calculations on findings, putting this in CSV format
             for key, value in findings_dict.items():
-                mariadb_cursor.execute(SELECT_STOCK_NAME_AND_ACRONYM.format(key))
+                mariadb_cursor.execute(self.SELECT_STOCK_NAME_AND_ACRONYM.format(key))
                 stock_of_interest_data = mariadb_cursor.fetchall()
                 for (stock_name, stock_acronym) in stock_of_interest_data:
                     contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
@@ -131,20 +131,20 @@ class Distributor(stomp.ConnectionListener):
         self.logger.info("Distributor configuration: {}".format(distributor_config_config))
 
         # connect to the DB
-        mariadb_cursor = maria_db_factory(distributor_config_config[MARIA_DB_CONFIG][USER], \
-            distributor_config_config[MARIA_DB_CONFIG][PASSWORD], \
-            distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_IP], \
-            distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_PORT], \
-            distributor_config_config[MARIA_DB_CONFIG][MARIA_DB_DATABASE])
+        mariadb_cursor = self.maria_db_factory(distributor_config_config[self.MARIA_DB_CONFIG][self.USER], \
+            distributor_config_config[self.MARIA_DB_CONFIG][self.PASSWORD], \
+            distributor_config_config[self.MARIA_DB_CONFIG][self.MARIA_DB_IP], \
+            distributor_config_config[self.MARIA_DB_CONFIG][self.MARIA_DB_PORT], \
+            distributor_config_config[self.MARIA_DB_CONFIG][self.MARIA_DB_DATABASE])
         self.logger.info("Connected to MariaDB at {}".format(datetime.datetime.now().timestamp()))
 
         # Gemini setup
-        genai.configure(api_key=distributor_config_config[GOOGLE_GEMINI_CONFIG][MY_KEY])
+        genai.configure(api_key=distributor_config_config[self.GOOGLE_GEMINI_CONFIG][self.MY_KEY])
         model = genai.GenerativeModel("gemini-2.0-flash")
 
         # check and gather the stock data from one pull ago and the most recent pull
-        mariadb_cursor.execute(SELECT_ALL_DATA_FROM_PAST_DAYS.format(LIMIT))
-        data = format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
+        mariadb_cursor.execute(self.SELECT_ALL_DATA_FROM_PAST_DAYS.format(self.LIMIT))
+        data = self.format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
 
         # ask AI for some insight
         if data is not None:
@@ -161,23 +161,23 @@ class Distributor(stomp.ConnectionListener):
                 traceback.print_exc()
 
             # get recipients from DB
-            mariadb_cursor.execute(SELECT_USERS)
+            mariadb_cursor.execute(self.SELECT_USERS)
             recipient_list = mariadb_cursor.fetchall()
             recipients = []
             for recipient in recipient_list:
                 recipients.append(recipient[0])
 
             # put content in .csv
-            csv_content = open(distributor_config_config[EMAIL_CONFIG][ATTACHMENT], "w+")
+            csv_content = open(distributor_config_config[self.EMAIL_CONFIG][self.ATTACHMENT], "w+")
             csv_content.truncate(0) # erase data before writing
             csv_content.write(data)
             csv_content.close()
-            yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+            yag = yagmail.SMTP(distributor_config_config[self.EMAIL_CONFIG][self.EMAIL_ADDRESS], oauth2_file=distributor_config_config[self.EMAIL_CONFIG][self.OAUTH2_FILE])
             yag.send(
                 to=recipients,
                 subject="Todays Stock Data " + str(datetime.datetime.now()),
                 contents=ai_response,
-                attachments=[distributor_config_config[EMAIL_CONFIG][ATTACHMENT]]
+                attachments=[distributor_config_config[self.EMAIL_CONFIG][self.ATTACHMENT]]
             )
         else:
             self.logger.info("Data could not be pulled, and we will request an apology statement from the AI agent at {}".format(datetime.datetime.now().timestamp()))
@@ -193,13 +193,13 @@ class Distributor(stomp.ConnectionListener):
                 traceback.print_exc()
 
             # get recipients from DB
-            mariadb_cursor.execute(SELECT_USERS)
+            mariadb_cursor.execute(self.SELECT_USERS)
             recipient_list = mariadb_cursor.fetchall()
             recipients = []
             for recipient in recipient_list:
                 recipients.append(recipient[0])
 
-            yag = yagmail.SMTP(distributor_config_config[EMAIL_CONFIG][EMAIL_ADDRESS], oauth2_file=distributor_config_config[EMAIL_CONFIG][OAUTH2_FILE])
+            yag = yagmail.SMTP(distributor_config_config[self.EMAIL_CONFIG][self.EMAIL_ADDRESS], oauth2_file=distributor_config_config[self.EMAIL_CONFIG][self.OAUTH2_FILE])
             yag.send(
                 to=recipients,
                 subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
@@ -219,11 +219,14 @@ class Distributor(stomp.ConnectionListener):
         headers: the headers of the message received
         message: the message received
         '''
-        if not self.active:
-            self.active = True
-            asyncio.run_coroutine_threadsafe(self.conduct_distribution(), self.loop)
-        else:
-            self.logger.warning("Already active, ignoring message")
+        try:
+            if not self.active:
+                self.active = True
+                asyncio.run_coroutine_threadsafe(self.conduct_distribution(), self.loop)
+            else:
+                self.logger.warning("Already active, ignoring message")
+        except Exception as e:
+            self.logger.error("Catching exception, {}". format(e))
 
 
     def set_stomp_connection(self, stomp_connection):
