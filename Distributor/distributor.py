@@ -203,7 +203,7 @@ class Distributor(stomp.ConnectionListener):
             yag.send(
                 to=recipients,
                 subject="StockRate Pipeline Issue " + str(datetime.datetime.now()),
-                contents=ai_response.text
+                contents=ai_response
             )
         self.stomp_connection.send("/topic/distribution-reply", json.dumps({"distribution_stop": datetime.datetime.now().timestamp()}))
         self.active = False
