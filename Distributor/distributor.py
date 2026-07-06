@@ -87,7 +87,7 @@ class Distributor(stomp.ConnectionListener):
         self.logger.info("Distributor configuration: {}".format(distributor_config))
 
 
-    def maria_db_factory(user, password, host, port, database):
+    def maria_db_factory(self, user, password, host, port, database):
         '''
         Returns a connection cursor to mariadb
         '''
