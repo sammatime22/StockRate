@@ -1,4 +1,5 @@
+google-generativeai==0.8.3
 mariadb==1.0.11
 PyYAML==3.12
-google-generativeai==0.8.3
+stomp.py==8.1.0
 yagmail==0.15.293

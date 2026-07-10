@@ -2,7 +2,7 @@
 # sammatime22, 2026
 import stomp
 
-HB_INTERVAL = 10000
+HB_INTERVAL = 0
 IP = "ip"
 PORT = "port"
 USERNAME = "username"
@@ -26,4 +26,5 @@ def stomp_factory(listener, id, stomp_config):
     stomp_connection.connect(stomp_config[USERNAME], stomp_config[PASSWORD])
     for sub in stomp_config[SUBSCRIPTIONS]:
         stomp_connection.subscribe(destination=sub, id=id)
+        id = id + 1
     listener.set_stomp_connection(stomp_connection)
