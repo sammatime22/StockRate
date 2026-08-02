@@ -35,6 +35,10 @@ class Collector(stomp.ConnectionListener):
     MARIA_DB_IP = "host"
     MARIA_DB_PORT = "port"
     MARIA_DB_DATABASE = "database"
+    
+    TASKING = "tasking"
+    COLLECTOR_ID = "collector_id"
+    TOTAL_COLLECTORS = "total_collectors"
 
     # Constants for operations
     AWAIT_TIME = 90 # 90s between each pull for stock data
@@ -48,6 +52,7 @@ class Collector(stomp.ConnectionListener):
     GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
     GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
     GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
+    GET_STOCKS_FOR_COLLECTOR_ID = "SELECT stock_id, stock_name, acronym, market FROM STOCK WHERE MOD(stock_id, {}) = {};"
     INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, source_id, price, rate_of_change) VALUES ({},{},{},{},{});"
     INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
 
@@ -194,21 +199,27 @@ class Collector(stomp.ConnectionListener):
 
         # COLLECTION
         # go through all DATA_SOURCES
+        # TODO: Somehow we need the Orchestrator to tell us what stocks this particular Collector should collect
+        # Alternatively, each collector could determine which stocks to collect based on ID plus some modulo operation
         mariadb_cursor.execute(self.GET_DATA_SOURCES)
         data_sources = mariadb_cursor.fetchall()
         if len(data_sources) > 0:
-            for (source_id, source_location, extension, search_terms) in data_sources:
+            for (source_id, source_location, extension) in data_sources:
                 self.logger.info("Collecting data from source {} at {}".format(source_location, datetime.datetime.now().timestamp()))
                 # go through all search_terms
-                for search_term in search_terms.split(","):
-                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
+                # for search_term in search_terms.split(","):
+                mariadb_cursor.execute(self.GET_STOCKS_FOR_COLLECTOR_ID.format(\
+                    collector_config_config[self.TASKING][self.COLLECTOR_ID],\
+                    collector_config_config[self.TASKING][self.TOTAL_COLLECTORS]))
+                stock_info = mariadb_cursor.fetchall()
+                for (stock_id, stock_name, acronym, market) in stock_info:
+                    self.logger.info("Collecting data for stock {}".format(stock_name))
+                    resp = requests.get("https://{}/{}/{}:{}".format(source_location, extension, acronym, market))
                     time.sleep(self.AWAIT_TIME) # be polite
                     # place the data into the COLLECTED_DATA
-                    mariadb_cursor.execute(self.GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
-                    stock_id = mariadb_cursor.fetchall()
                     modified_content = str(resp.content).replace('"', self.ETOUQ)
                     if len(stock_id) > 0:
-                        mariadb_cursor.execute(self.INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id[0][0], modified_content))
+                        mariadb_cursor.execute(self.INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id, modified_content))
 
         # CLEANING
         # Get every stock ID 
@@ -281,6 +292,7 @@ class Collector(stomp.ConnectionListener):
 
 
 # Collector Setup
+# TODO: We need to set this up so we can set up multiple Collectors
 COLLECTOR_ID = 26553
 COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
 with open(COLLECTOR_CONFIG, "r") as collector_config_file:

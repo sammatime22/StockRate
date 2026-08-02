@@ -58,7 +58,11 @@ class Orchestrator(stomp.ConnectionListener):
     loop = None
     thread = None
 
-    def __init__(self, matchadb_url, start_time_hour=0, start_time_minute=0):
+    # keeping track of collectors
+    collector_responses_returned = 0
+    total_active_collectors = 1
+
+    def __init__(self, matchadb_url, start_time_hour=0, start_time_minute=0, total_active_collectors):
         '''
         The initializer for the Orchestrator.
 
@@ -80,6 +84,8 @@ class Orchestrator(stomp.ConnectionListener):
         self.matchadb_url = matchadb_url
 
         self.SEND_TIME = start_time_hour * 60 + start_time_minute
+
+        self.total_active_collectors = total_active_collectors
 
 
     def matcha_db_post(self, updates_to_post):
@@ -111,14 +117,17 @@ class Orchestrator(stomp.ConnectionListener):
         -----------
         message_body: the body of the message received from the Collector
         '''
-        # send message to kick off distributor
-        self.logger.info("Received Collector response (at {:02}:{:02}z): {}".format(datetime.datetime.now().hour, datetime.datetime.now().minute, message_body))
-        self.stats_to_post["stats"]["collection_stop"] = message_body["collection_stop"]
-        distribution_start = datetime.datetime.now().timestamp()
-        self.stomp_connection.send("/topic/distribution-request", self.DISTRIBUTION_REQUEST.format(int(distribution_start)))
-        self.stats_to_post["stats"]["distribution_start"] = distribution_start
-        self.current_state = self.OrchestratorState.AMID_DISTRIBUTION
-        self.logger.info("Moving from Collection to Distribution at {}".format(datetime.datetime.now().timestamp()))
+        collector_responses_returned = collector_responses_returned + 1
+        if collector_responses_returned == total_active_collectors:
+            # send message to kick off distributor
+            self.logger.info("Received Collector response (at {:02}:{:02}z): {}".format(datetime.datetime.now().hour, datetime.datetime.now().minute, message_body))
+            self.stats_to_post["stats"]["collection_stop"] = message_body["collection_stop"]
+            distribution_start = datetime.datetime.now().timestamp()
+            self.stomp_connection.send("/topic/distribution-request", self.DISTRIBUTION_REQUEST.format(int(distribution_start)))
+            self.stats_to_post["stats"]["distribution_start"] = distribution_start
+            self.current_state = self.OrchestratorState.AMID_DISTRIBUTION
+            self.logger.info("Moving from Collection to Distribution at {}".format(datetime.datetime.now().timestamp()))
+            collector_responses_returned = 0
 
 
     async def handle_distributor_response(self, message_body):
@@ -181,6 +190,7 @@ class Orchestrator(stomp.ConnectionListener):
                     self.logger.info(self.stats_to_post)
                     collection_start = datetime.datetime.now().timestamp()
                     self.logger.info(collection_start)
+                    # TODO: We need to make this portion of code its own method, and send different collectors different stocks to collect
                     self.stomp_connection.send("/topic/collection-request", self.COLLECTION_REQUEST.format(int(collection_start)))
                     self.logger.info("Sent Collection Request at {}".format(datetime.datetime.now().timestamp()))
                     self.stats_to_post["stats"]["collection_start"] = collection_start
@@ -196,7 +206,9 @@ ORCHESTRATOR_ID = 12345
 ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
 with open(ORCHESTRATOR_CONFIG, "r") as orchestrator_config_file:
     orchestrator_config = yaml.safe_load(orchestrator_config_file)
-    orchestrator = Orchestrator(orchestrator_config["matcha_db_url"], orchestrator_config["kickoff"]["start_time_hour"], orchestrator_config["kickoff"]["start_time_minute"])
+    orchestrator = Orchestrator(orchestrator_config["matcha_db_url"], \
+        orchestrator_config["kickoff"]["start_time_hour"], orchestrator_config["kickoff"]["start_time_minute"],\
+        orchestrator_config["total_active_collectors"])
     stomp_factory(orchestrator, ORCHESTRATOR_ID, orchestrator_config["stomp_config"])
     orchestrator_thread = threading.Thread(target=orchestrator.main_loop)
 
