@@ -62,13 +62,14 @@ class Orchestrator(stomp.ConnectionListener):
     collector_responses_returned = 0
     total_active_collectors = 1
 
-    def __init__(self, matchadb_url, start_time_hour=0, start_time_minute=0, total_active_collectors):
+    def __init__(self, matchadb_url, total_active_collectors, start_time_hour=0, start_time_minute=0):
         '''
         The initializer for the Orchestrator.
 
         Parameters:
         -----------
         matchadb_url: the URL of the MatchaDB instance to post updates to
+        total_active_collectors: the total active number of collectors in use
         start_time_hour: the hour at which to start the orchestrator
         start_time_minute: the minute at which to start the orchestrator
         '''
