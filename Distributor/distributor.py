@@ -36,11 +36,8 @@ class Distributor(stomp.ConnectionListener):
     EMAIL_ADDRESS = "email_address"
     OAUTH2_FILE = "oauth2_file"
 
-    # Constants for operations
-    LIMIT = 20 # temp
-
     # Constants for SQL queries
-    SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA ORDER BY pull_id DESC LIMIT {};"
+    SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA WHERE pull_date > DATE_SUB(NOW(), INTERVAL 2 DAY) ORDER BY pull_id DESC;"
     SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
     SELECT_USERS="SELECT email FROM USER;"
  

@@ -10,6 +10,7 @@ CREATE TABLE CLEANED_DATA (
     data_id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
     stock_id        SMALLINT(5)  NOT NULL,
     pull_id         BIGINT(20)   NOT NULL,
+    pull_date       TIMESTAMP     NOT NULL,
     source_id       SMALLINT(5)  NOT NULL,
     price           FLOAT(10)    NOT NULL,
     rate_of_change  FLOAT(10)    NOT NULL,

@@ -47,13 +47,13 @@ class Collector(stomp.ConnectionListener):
     ETOUQ = "etouq"
 
     # Constants for SQL queries
-    GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > SUBDATE(NOW(), 1);"
+    GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, pull_date, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > SUBDATE(NOW(), 1);"
     GET_DATA_SOURCES = "SELECT source_id, source_location, extension, search_terms FROM DATA_SOURCES;"
     GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
     GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
     GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
     GET_STOCKS_FOR_COLLECTOR_ID = "SELECT stock_id, stock_name, acronym, market FROM STOCK WHERE MOD(stock_id, {}) = {};"
-    INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, source_id, price, rate_of_change) VALUES ({},{},{},{},{});"
+    INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES ({},{},{},{},{},{});"
     INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
 
     # Constants for currencies (currently just USD)
@@ -240,11 +240,11 @@ class Collector(stomp.ConnectionListener):
                     mariadb_cursor.execute(self.GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id[0], stock_id[0]))
                 
                     collected_data = mariadb_cursor.fetchall()
-                    for (pull_id, dirty_data) in collected_data:
+                    for (pull_id, pull_date, dirty_data) in collected_data:
                         # For the dirty data, clean it and insert it into the DB
                         price, rate_of_change = self.cleaning_algorithm(dirty_data.replace(self.ETOUQ, '"'))
                         time.sleep(self.AWAIT_TIME)
-                        mariadb_cursor.execute(self.INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
+                        mariadb_cursor.execute(self.INSERT_CLEAN_DATA.format(stock_id[0], pull_id, pull_date, source_id[0], price, rate_of_change))
                         self.logger.info("Cleaned data for stock_id {} and source_id {} at {}".format(stock_id[0], source_id[0], datetime.datetime.now().timestamp()))
                 except Exception as e:
                     self.logger.error("Error seen during data cleaning", e)

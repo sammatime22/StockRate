@@ -207,9 +207,8 @@ ORCHESTRATOR_ID = 12345
 ORCHESTRATOR_CONFIG = "/config-dir/orchestrator-config-private.yaml"
 with open(ORCHESTRATOR_CONFIG, "r") as orchestrator_config_file:
     orchestrator_config = yaml.safe_load(orchestrator_config_file)
-    orchestrator = Orchestrator(orchestrator_config["matcha_db_url"], \
-        orchestrator_config["kickoff"]["start_time_hour"], orchestrator_config["kickoff"]["start_time_minute"],\
-        orchestrator_config["total_active_collectors"])
+    orchestrator = Orchestrator(orchestrator_config["matcha_db_url"], orchestrator_config["total_active_collectors"],\
+        orchestrator_config["kickoff"]["start_time_hour"], orchestrator_config["kickoff"]["start_time_minute"])
     stomp_factory(orchestrator, ORCHESTRATOR_ID, orchestrator_config["stomp_config"])
     orchestrator_thread = threading.Thread(target=orchestrator.main_loop)
 
