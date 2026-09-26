@@ -39,7 +39,11 @@ class Collector(stomp.ConnectionListener):
     # Constants for operations
     AWAIT_TIME = 90 # 90s between each pull for stock data
     HEADERS = requests.utils.default_headers()
-    HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'})
+    HEADERS.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'        
+    })
     ETOUQ = "etouq"
 
     # Constants for SQL queries
