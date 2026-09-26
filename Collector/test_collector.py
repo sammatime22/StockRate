@@ -30,6 +30,7 @@ import datetime
 import gzip
 import importlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -161,6 +162,7 @@ def collector_module(monkeypatch):
 
     module = importlib.import_module("collector")
     yield module
+    logging.getLogger().removeHandler(module.Collector.handler)
     module.Collector.handler.close()
 
 
