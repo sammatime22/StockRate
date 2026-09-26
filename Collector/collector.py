@@ -210,8 +210,9 @@ class Collector(stomp.ConnectionListener):
                 for search_term in search_terms.split(","):
                     resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term), headers=self.HEADERS)
                     time.sleep(self.AWAIT_TIME) # be polite
-                    if self.UNSUPPORTED_PAGE_MARKER in resp.content:
-                        self.logger.warning("Source {} returned an unsupported device page for {}, skipping".format(source_location, search_term))
+                    if resp.status_code != 200 or self.UNSUPPORTED_PAGE_MARKER in resp.content:
+                        self.logger.warning("Source {} returned an unusable page for {} (status {}, final url {}, redirects {}), skipping".format(
+                            source_location, search_term, resp.status_code, resp.url, [r.headers.get('Location') for r in resp.history]))
                         continue
                     # place the data into the COLLECTED_DATA
                     mariadb_cursor.execute(self.GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
@@ -246,7 +247,7 @@ class Collector(stomp.ConnectionListener):
                         mariadb_cursor.execute(self.INSERT_CLEAN_DATA.format(stock_id[0], pull_id, source_id[0], price, rate_of_change))
                         self.logger.info("Cleaned data for stock_id {} and source_id {} at {}".format(stock_id[0], source_id[0], datetime.datetime.now().timestamp()))
                 except Exception as e:
-                    self.logger.error("Error seen during data cleaning", e)
+                    self.logger.exception("Error seen during data cleaning: {}".format(e))
         self.stomp_connection.send("/topic/collection-reply", json.dumps({"collection_stop": datetime.datetime.now().timestamp()}))
         self.active = False
         self.logger.info("Finished collection and cleaning at {}".format(datetime.datetime.now().timestamp()))
@@ -291,13 +292,14 @@ class Collector(stomp.ConnectionListener):
 
 
 # Collector Setup
-COLLECTOR_ID = 26553
-COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
-with open(COLLECTOR_CONFIG, "r") as collector_config_file:
-    collector_config = yaml.safe_load(collector_config_file)
-    collector = Collector(collector_config) 
-    stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
-    collector_thread = threading.Thread(target=collector.main_loop)
+if __name__ == "__main__":
+    COLLECTOR_ID = 26553
+    COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
+    with open(COLLECTOR_CONFIG, "r") as collector_config_file:
+        collector_config = yaml.safe_load(collector_config_file)
+        collector = Collector(collector_config) 
+        stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
+        collector_thread = threading.Thread(target=collector.main_loop)
 
-    # Starting Collector
-    collector_thread.start()
+        # Starting Collector
+        collector_thread.start()
