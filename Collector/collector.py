@@ -39,7 +39,14 @@ class Collector(stomp.ConnectionListener):
     # Constants for operations
     AWAIT_TIME = 90 # 90s between each pull for stock data
     HEADERS = requests.utils.default_headers()
-    HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'})
+    # Google Finance (beta) serves a "Your device isn't supported" page to unrecognized clients,
+    # so present ourselves as a current desktop browser
+    HEADERS.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+    })
+    UNSUPPORTED_PAGE_MARKER = b'alt="Unsupported page"'
     ETOUQ = "etouq"
 
     # Constants for SQL queries
@@ -201,8 +208,11 @@ class Collector(stomp.ConnectionListener):
                 self.logger.info("Collecting data from source {} at {}".format(source_location, datetime.datetime.now().timestamp()))
                 # go through all search_terms
                 for search_term in search_terms.split(","):
-                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term))
+                    resp = requests.get("https://{}/{}/{}".format(source_location, extension, search_term), headers=self.HEADERS)
                     time.sleep(self.AWAIT_TIME) # be polite
+                    if self.UNSUPPORTED_PAGE_MARKER in resp.content:
+                        self.logger.warning("Source {} returned an unsupported device page for {}, skipping".format(source_location, search_term))
+                        continue
                     # place the data into the COLLECTED_DATA
                     mariadb_cursor.execute(self.GET_STOCK_ID_FOR_STOCK_NAME.format(search_term))
                     stock_id = mariadb_cursor.fetchall()
