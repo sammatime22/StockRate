@@ -65,9 +65,9 @@ class Collector(stomp.ConnectionListener):
     # Other constants
     PERCENT = "%"
 
-    # this will be globally kept - the collector probably should be a class but oh well at this time
-    value_tag_class = None
-    rate_of_change_class = None
+    # Patterns for the text of the tags holding the price (e.g. "$343.92") and rate of change (e.g. "+0.46%")
+    PRICE_PATTERN = re.compile(r"^\s*(?:{})([\d,]+(?:\.\d+)?)\s*$".format("|".join(re.escape(currency) for currency in CURRENCIES)))
+    RATE_OF_CHANGE_PATTERN = re.compile(r"^\s*([+-]?[\d,]+(?:\.\d+)?){}\s*$".format(re.escape(PERCENT)))
 
     # Logging
     logger = None
@@ -133,29 +133,14 @@ class Collector(stomp.ConnectionListener):
         return conn.cursor()
 
 
-    def learn_tag_contents(self, soupy):
-        '''
-        This method determines which tags will have currency values.
-
-        Parameters:
-        -----------
-        soupy: the BeautifulSoup object to learn from
-
-        Returns:
-        -----------
-        - the class of the tag that contains the currency value
-        - the class of the tag that contains the rate of change value
-        '''
-        # return example_tag_value['class'], example_tag_rate_of_change['class']
-        example_tag_value = soupy.find_all('div',string=re.compile("\$\d+(?:\.\d+)?"))[0].find_all('div')[-1]
-        example_tag_rate = soupy.find_all('div',string=re.compile("\d+(?:\.\d+)\%?"))[0].find_all('div')[-1]
-
-        return ' '.join(example_tag_value.attrs['class']), ' '.join(example_tag_rate.attrs['class'])
-
-
     def cleaning_algorithm(self, dirty_data):
         '''
         Returns cleaned data based on the provided dirty data.
+
+        Google Finance renders the quote header (current price, then the day's percent change)
+        before any other currency amounts on the page, such as the Open/High/Low stats or the
+        related stocks table. The price is taken to be the first text that is only a currency
+        amount, and the rate of change the first percentage that follows it.
 
         Parameters:
         -----------
@@ -163,25 +148,19 @@ class Collector(stomp.ConnectionListener):
 
         Returns:
         -----------
-        - the cleaned price
-        - the cleaned rate of change
+        - the cleaned price, or -1.0 if none was found
+        - the cleaned rate of change, or -1.0 if none was found
         '''
         price = -1.0
         rate_of_change = -1.0
-        # clean my data please!
-        # within the data
         soupy = BeautifulSoup(dirty_data, features='lxml')
-        if self.value_tag_class == None and self.rate_of_change_class == None:
-            # there are likely tags that contain numeric currency values
-            self.value_tag_class, self.rate_of_change_class = self.learn_tag_contents(soupy)
-        all_value_tags = soupy.find_all(class_=self.value_tag_class)
-        all_rate_of_change_tags = soupy.find_all(class_=self.rate_of_change_class)
-        # it is possible that there is only one numeric currency value in the content
-        if len(all_value_tags) > 1:
-            # if this is the case, just grab this
-            price = float(all_value_tags[0].text.replace("$","").replace(",",""))
-            rate_of_change = float(all_rate_of_change_tags[0].text.replace("%","").replace(",",""))
-        
+        price_text = soupy.find(string=self.PRICE_PATTERN)
+        if price_text is not None:
+            price = float(self.PRICE_PATTERN.match(price_text).group(1).replace(",", ""))
+            rate_of_change_text = price_text.find_next(string=self.RATE_OF_CHANGE_PATTERN)
+            if rate_of_change_text is not None:
+                rate_of_change = float(self.RATE_OF_CHANGE_PATTERN.match(rate_of_change_text).group(1).replace(",", ""))
+
         return price, rate_of_change
 
 
@@ -231,9 +210,6 @@ class Collector(stomp.ConnectionListener):
         # Go through all stock_ids
         #for stock_id in stock_ids:
         for source_id in source_ids:
-            value_tag_class = None
-            rate_of_change_class = None
-
             for stock_id in stock_ids:
                 # ...and get data from the past day that we collected
                 try:

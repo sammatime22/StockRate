@@ -15,7 +15,8 @@
 #   apk add python3 py3-pytest py3-requests py3-beautifulsoup4 py3-lxml py3-yaml
 #
 # Run from the Collector directory:
-#   python3 -m pytest -s test_collector.py
+#   python3 -m pytest -s test_collector.py                          (everything, including the live request)
+#   python3 -m pytest -s test_collector.py -k cleaning_algorithm    (offline, parses saved pages only)
 #
 # Optional environment variables:
 #   STOCKRATE_SOURCE       source_location          (default: www.google.com)
@@ -26,6 +27,7 @@
 #   STOCKRATE_OUT          output directory         (default: ./test-output)
 import asyncio
 import datetime
+import gzip
 import importlib
 import json
 import os
@@ -44,6 +46,7 @@ EXTENSION = os.environ.get("STOCKRATE_EXTENSION", "finance/quote")
 TICKERS = [t.strip() for t in os.environ.get("STOCKRATE_TICKERS", "GOOGL:NASDAQ").split(",") if t.strip()]
 USER_AGENT = os.environ.get("STOCKRATE_USER_AGENT")
 REPLAY_FILE = os.environ.get("STOCKRATE_REPLAY_FILE")
+FIXTURES_DIR = os.path.join(HERE, "test-fixtures")
 OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "test-output")))
 
 SCHEMA = """
@@ -234,8 +237,6 @@ def test_conduct_collection(collector_module, monkeypatch):
     report.extend("  {}".format(row) for row in collected or ["<none>"])
     report.append("CLEANED_DATA (data_id, stock_id, pull_id, source_id, price, rate_of_change):")
     report.extend("  {}".format(row) for row in cleaned or ["<none>"])
-    report.append("Learned tag classes: value={!r} rate_of_change={!r}".format(
-        collector.value_tag_class, collector.rate_of_change_class))
     report.append("STOMP messages: {}".format(stomp_connection.sent))
     report.append("")
     report.append("Output written to {}".format(OUT_DIR))
@@ -250,3 +251,21 @@ def test_conduct_collection(collector_module, monkeypatch):
     assert collected, "nothing was stored in COLLECTED_DATA; see exchange_*.txt and response_*.html"
     assert cleaned, "nothing was cleaned; see collector.log"
     assert all(price > 0 for (_, _, _, _, price, _) in cleaned), "cleaning did not find a price; see collector.log"
+
+
+@pytest.mark.parametrize("fixture, expected_price, expected_rate_of_change", [
+    # Google Finance beta, GOOGL at close on Sep 25, 2026: $343.92, +0.46% (after hours $344.01, +0.03%)
+    ("google-finance-GOOGL-2026-09-26.html.gz", 343.92, 0.46),
+])
+def test_cleaning_algorithm(collector_module, fixture, expected_price, expected_rate_of_change):
+    with gzip.open(os.path.join(FIXTURES_DIR, fixture), "rb") as page:
+        content = page.read()
+    collector = collector_module.Collector({})
+    # Clean the page the way conduct_collection stores and reads it back
+    dirty_data = str(content).replace('"', collector.ETOUQ).replace(collector.ETOUQ, '"')
+
+    price, rate_of_change = collector.cleaning_algorithm(dirty_data)
+
+    print("\n{}: price={} rate_of_change={}".format(fixture, price, rate_of_change))
+    assert price == pytest.approx(expected_price)
+    assert rate_of_change == pytest.approx(expected_rate_of_change)
