@@ -43,7 +43,14 @@ class Collector(stomp.ConnectionListener):
     # Constants for operations
     AWAIT_TIME = 90 # 90s between each pull for stock data
     HEADERS = requests.utils.default_headers()
-    HEADERS.update({'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'})
+    # Google Finance (beta) serves a "Your device isn't supported" page to unrecognized clients,
+    # so present ourselves as a current desktop browser
+    HEADERS.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+    })
+    UNSUPPORTED_PAGE_MARKER = b'alt="Unsupported page"'
     ETOUQ = "etouq"
 
     # Constants for SQL queries
@@ -63,9 +70,9 @@ class Collector(stomp.ConnectionListener):
     # Other constants
     PERCENT = "%"
 
-    # this will be globally kept - the collector probably should be a class but oh well at this time
-    value_tag_class = None
-    rate_of_change_class = None
+    # Patterns for the text of the tags holding the price (e.g. "$343.92") and rate of change (e.g. "+0.46%")
+    PRICE_PATTERN = re.compile(r"^\s*(?:{})([\d,]+(?:\.\d+)?)\s*$".format("|".join(re.escape(currency) for currency in CURRENCIES)))
+    RATE_OF_CHANGE_PATTERN = re.compile(r"^\s*([+-]?[\d,]+(?:\.\d+)?){}\s*$".format(re.escape(PERCENT)))
 
     # Logging
     logger = None
@@ -131,29 +138,14 @@ class Collector(stomp.ConnectionListener):
         return conn.cursor()
 
 
-    def learn_tag_contents(self, soupy):
-        '''
-        This method determines which tags will have currency values.
-
-        Parameters:
-        -----------
-        soupy: the BeautifulSoup object to learn from
-
-        Returns:
-        -----------
-        - the class of the tag that contains the currency value
-        - the class of the tag that contains the rate of change value
-        '''
-        # return example_tag_value['class'], example_tag_rate_of_change['class']
-        example_tag_value = soupy.find_all('div',string=re.compile("\$\d+(?:\.\d+)?"))[0].find_all('div')[-1]
-        example_tag_rate = soupy.find_all('div',string=re.compile("\d+(?:\.\d+)\%?"))[0].find_all('div')[-1]
-
-        return ' '.join(example_tag_value.attrs['class']), ' '.join(example_tag_rate.attrs['class'])
-
-
     def cleaning_algorithm(self, dirty_data):
         '''
         Returns cleaned data based on the provided dirty data.
+
+        Google Finance renders the quote header (current price, then the day's percent change)
+        before any other currency amounts on the page, such as the Open/High/Low stats or the
+        related stocks table. The price is taken to be the first text that is only a currency
+        amount, and the rate of change the first percentage that follows it.
 
         Parameters:
         -----------
@@ -161,25 +153,19 @@ class Collector(stomp.ConnectionListener):
 
         Returns:
         -----------
-        - the cleaned price
-        - the cleaned rate of change
+        - the cleaned price, or -1.0 if none was found
+        - the cleaned rate of change, or -1.0 if none was found
         '''
         price = -1.0
         rate_of_change = -1.0
-        # clean my data please!
-        # within the data
         soupy = BeautifulSoup(dirty_data, features='lxml')
-        if self.value_tag_class == None and self.rate_of_change_class == None:
-            # there are likely tags that contain numeric currency values
-            self.value_tag_class, self.rate_of_change_class = self.learn_tag_contents(soupy)
-        all_value_tags = soupy.find_all(class_=self.value_tag_class)
-        all_rate_of_change_tags = soupy.find_all(class_=self.rate_of_change_class)
-        # it is possible that there is only one numeric currency value in the content
-        if len(all_value_tags) > 1:
-            # if this is the case, just grab this
-            price = float(all_value_tags[0].text.replace("$","").replace(",",""))
-            rate_of_change = float(all_rate_of_change_tags[0].text.replace("%","").replace(",",""))
-        
+        price_text = soupy.find(string=self.PRICE_PATTERN)
+        if price_text is not None:
+            price = float(self.PRICE_PATTERN.match(price_text).group(1).replace(",", ""))
+            rate_of_change_text = price_text.find_next(string=self.RATE_OF_CHANGE_PATTERN)
+            if rate_of_change_text is not None:
+                rate_of_change = float(self.RATE_OF_CHANGE_PATTERN.match(rate_of_change_text).group(1).replace(",", ""))
+
         return price, rate_of_change
 
 
@@ -207,7 +193,6 @@ class Collector(stomp.ConnectionListener):
             for (source_id, source_location, extension) in data_sources:
                 self.logger.info("Collecting data from source {} at {}".format(source_location, datetime.datetime.now().timestamp()))
                 # go through all search_terms
-                # for search_term in search_terms.split(","):
                 mariadb_cursor.execute(self.GET_STOCKS_FOR_COLLECTOR_ID.format(\
                     collector_config_config[self.TASKING][self.COLLECTOR_ID],\
                     collector_config_config[self.TASKING][self.TOTAL_COLLECTORS]))
@@ -216,6 +201,10 @@ class Collector(stomp.ConnectionListener):
                     self.logger.info("Collecting data for stock {}".format(stock_name))
                     resp = requests.get("https://{}/{}/{}:{}".format(source_location, extension, acronym, market))
                     time.sleep(self.AWAIT_TIME) # be polite
+                    if resp.status_code != 200 or self.UNSUPPORTED_PAGE_MARKER in resp.content:
+                        self.logger.warning("Source {} returned an unusable page for {} (status {}, final url {}, redirects {}), skipping".format(
+                            source_location, search_term, resp.status_code, resp.url, [r.headers.get('Location') for r in resp.history]))
+                        continue
                     # place the data into the COLLECTED_DATA
                     modified_content = str(resp.content).replace('"', self.ETOUQ)
                     if len(stock_id) > 0:
@@ -231,9 +220,6 @@ class Collector(stomp.ConnectionListener):
         # Go through all stock_ids
         #for stock_id in stock_ids:
         for source_id in source_ids:
-            value_tag_class = None
-            rate_of_change_class = None
-
             for stock_id in stock_ids:
                 # ...and get data from the past day that we collected
                 try:
@@ -247,7 +233,7 @@ class Collector(stomp.ConnectionListener):
                         mariadb_cursor.execute(self.INSERT_CLEAN_DATA.format(stock_id[0], pull_id, pull_date, source_id[0], price, rate_of_change))
                         self.logger.info("Cleaned data for stock_id {} and source_id {} at {}".format(stock_id[0], source_id[0], datetime.datetime.now().timestamp()))
                 except Exception as e:
-                    self.logger.error("Error seen during data cleaning", e)
+                    self.logger.exception("Error seen during data cleaning: {}".format(e))
         self.stomp_connection.send("/topic/collection-reply", json.dumps({"collection_stop": datetime.datetime.now().timestamp()}))
         self.active = False
         self.logger.info("Finished collection and cleaning at {}".format(datetime.datetime.now().timestamp()))
@@ -292,14 +278,14 @@ class Collector(stomp.ConnectionListener):
 
 
 # Collector Setup
-# TODO: We need to set this up so we can set up multiple Collectors
-COLLECTOR_ID = 26553
-COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
-with open(COLLECTOR_CONFIG, "r") as collector_config_file:
-    collector_config = yaml.safe_load(collector_config_file)
-    collector = Collector(collector_config) 
-    stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
-    collector_thread = threading.Thread(target=collector.main_loop)
+if __name__ == "__main__":
+    COLLECTOR_ID = 26553
+    COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
+    with open(COLLECTOR_CONFIG, "r") as collector_config_file:
+        collector_config = yaml.safe_load(collector_config_file)
+        collector = Collector(collector_config) 
+        stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
+        collector_thread = threading.Thread(target=collector.main_loop)
 
-    # Starting Collector
-    collector_thread.start()
+        # Starting Collector
+        collector_thread.start()

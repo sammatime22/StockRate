@@ -246,13 +246,14 @@ class Distributor(stomp.ConnectionListener):
 
 
 # Distributor Setup
-DISTRIBUTOR_ID = 34787
-DISTRIBUTOR_CONFIG = "/config-dir/distributor-config-private.yaml"
-with open(DISTRIBUTOR_CONFIG, "r") as distributor_config_file:
-    distributor_config = yaml.safe_load(distributor_config_file)
-    distributor = Distributor(distributor_config)
-    stomp_factory(distributor, DISTRIBUTOR_ID, distributor_config["stomp_config"])
-    distributor_thread = threading.Thread(target=distributor.main_loop)
+if __name__ == "__main__":
+    DISTRIBUTOR_ID = 34787
+    DISTRIBUTOR_CONFIG = "/config-dir/distributor-config-private.yaml"
+    with open(DISTRIBUTOR_CONFIG, "r") as distributor_config_file:
+        distributor_config = yaml.safe_load(distributor_config_file)
+        distributor = Distributor(distributor_config)
+        stomp_factory(distributor, DISTRIBUTOR_ID, distributor_config["stomp_config"])
+        distributor_thread = threading.Thread(target=distributor.main_loop)
 
-    # Starting Distributor
-    distributor_thread.start()
+        # Starting Distributor
+        distributor_thread.start()
