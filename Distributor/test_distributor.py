@@ -255,8 +255,8 @@ def add_pulls(db, pulls):
     '''
     Inserts CLEANED_DATA rows; pulls is a list of (pull_id, stock_id, price).
     '''
-    db.executemany("INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES (?, ?, '1970-1-1 00:00:00', 1, ?, 0)",
-                   [(stock_id, pull_id, price) for (pull_id, stock_id, price) in pulls])
+    db.executemany("INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES (?, ?, ?, 1, ?, 0)",
+                   [(stock_id, pull_id, pull_date, price) for (pull_id, stock_id, pull_date, price) in pulls])
 
 
 def run_distribution(harness):
@@ -279,10 +279,14 @@ def assert_finished(harness):
     assert harness.genai.api_key == "test-gemini-key"
 
 
+def get_time(delta):
+    return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=delta)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def test_distribution_sends_report(harness):
     # Yesterday's pull (1-3) then today's pull (4-6)
-    add_pulls(harness.db, [(1, 1, 100.0), (2, 2, 200.0), (3, 3, 50.0),
-                           (4, 1, 110.0), (5, 2, 150.0), (6, 3, 50.0)])
+    add_pulls(harness.db, [(1, 1, get_time(1), 100.0), (2, 2, get_time(1), 200.0), (3, 3, get_time(1), 50.0),
+                           (4, 1, get_time(0), 110.0), (5, 2, get_time(0), 150.0), (6, 3, get_time(0), 50.0)])
 
     email = run_distribution(harness)
 
