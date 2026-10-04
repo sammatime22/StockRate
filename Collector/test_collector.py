@@ -52,8 +52,10 @@ OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "te
 
 SCHEMA = """
 CREATE TABLE STOCK (
-    stock_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    acronym   TEXT
+    stock_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    acronym      TEXT,
+    stock_name   TEXT,
+    market       TEXT
 );
 CREATE TABLE DATA_SOURCES (
     source_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,7 +218,7 @@ def test_conduct_collection(collector_module, monkeypatch):
 
     monkeypatch.setattr(collector_module.requests, "get", recording_get)
 
-    config = {"maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"}}
+    config = {"maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"}, "tasking":{"collector_id": 0, "total_collectors": 1}}
     collector = collector_module.Collector(config)
     collector.AWAIT_TIME = 0
     stomp_connection = FakeStompConnection()

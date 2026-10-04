@@ -54,6 +54,7 @@ CREATE TABLE CLEANED_DATA (
     data_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_id        INTEGER NOT NULL,
     pull_id         INTEGER NOT NULL,
+    pull_date       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     source_id       INTEGER NOT NULL,
     price           REAL NOT NULL,
     rate_of_change  REAL NOT NULL
@@ -70,6 +71,7 @@ STOCKS = [
 ]
 USERS = ["first@example.com", "second@example.com"]
 
+DB_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 class FakeMariaDBCursor:
     '''
@@ -205,6 +207,9 @@ def harness(monkeypatch, request):
     sqlite_connection.executescript(SCHEMA)
     sqlite_connection.executemany("INSERT INTO STOCK (stock_id, stock_name, acronym) VALUES (?, ?, ?)", STOCKS)
     sqlite_connection.executemany("INSERT INTO USER (email) VALUES (?)", [(user,) for user in USERS])
+    sqlite_connection.create_function("NOW", 0, lambda: datetime.datetime.now(datetime.timezone.utc).strftime(DB_TIME_FORMAT))
+    sqlite_connection.create_function("SUBDATE", 2, lambda date, days: (
+        datetime.datetime.strptime(date, DB_TIME_FORMAT) - datetime.timedelta(days=days)).strftime(DB_TIME_FORMAT))
 
     fake_mariadb = types.ModuleType("mariadb")
     fake_mariadb.connect = lambda **kwargs: FakeMariaDBConnection(sqlite_connection)
@@ -250,7 +255,7 @@ def add_pulls(db, pulls):
     '''
     Inserts CLEANED_DATA rows; pulls is a list of (pull_id, stock_id, price).
     '''
-    db.executemany("INSERT INTO CLEANED_DATA (stock_id, pull_id, source_id, price, rate_of_change) VALUES (?, ?, 1, ?, 0)",
+    db.executemany("INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES (?, ?, '1970-1-1 00:00:00', 1, ?, 0)",
                    [(stock_id, pull_id, price) for (pull_id, stock_id, price) in pulls])
 
 

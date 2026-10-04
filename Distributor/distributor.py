@@ -37,7 +37,7 @@ class Distributor(stomp.ConnectionListener):
     OAUTH2_FILE = "oauth2_file"
 
     # Constants for SQL queries
-    SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id, price FROM CLEANED_DATA WHERE pull_date > DATE_SUB(NOW(), INTERVAL 2 DAY) ORDER BY pull_id DESC;"
+    SELECT_ALL_DATA_FROM_PAST_DAYS="SELECT stock_id FROM CLEANED_DATA WHERE pull_date > SUBDATE(NOW(), 2) ORDER BY pull_id DESC;"
     SELECT_STOCK_NAME_AND_ACRONYM="SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
     SELECT_USERS="SELECT email FROM USER;"
  
@@ -140,7 +140,7 @@ class Distributor(stomp.ConnectionListener):
         model = genai.GenerativeModel("gemini-2.0-flash")
 
         # check and gather the stock data from one pull ago and the most recent pull
-        mariadb_cursor.execute(self.SELECT_ALL_DATA_FROM_PAST_DAYS.format(self.LIMIT))
+        mariadb_cursor.execute(self.SELECT_ALL_DATA_FROM_PAST_DAYS)
         data = self.format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
 
         # ask AI for some insight

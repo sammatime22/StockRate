@@ -190,12 +190,12 @@ class Collector(stomp.ConnectionListener):
         mariadb_cursor.execute(self.GET_DATA_SOURCES)
         data_sources = mariadb_cursor.fetchall()
         if len(data_sources) > 0:
-            for (source_id, source_location, extension) in data_sources:
+            for (source_id, source_location, extension, search_terms) in data_sources:
                 self.logger.info("Collecting data from source {} at {}".format(source_location, datetime.datetime.now().timestamp()))
                 # go through all search_terms
                 mariadb_cursor.execute(self.GET_STOCKS_FOR_COLLECTOR_ID.format(\
-                    collector_config_config[self.TASKING][self.COLLECTOR_ID],\
-                    collector_config_config[self.TASKING][self.TOTAL_COLLECTORS]))
+                    collector_config_config[self.TASKING][self.TOTAL_COLLECTORS],\
+                    collector_config_config[self.TASKING][self.COLLECTOR_ID]))
                 stock_info = mariadb_cursor.fetchall()
                 for (stock_id, stock_name, acronym, market) in stock_info:
                     self.logger.info("Collecting data for stock {}".format(stock_name))
@@ -203,7 +203,7 @@ class Collector(stomp.ConnectionListener):
                     time.sleep(self.AWAIT_TIME) # be polite
                     if resp.status_code != 200 or self.UNSUPPORTED_PAGE_MARKER in resp.content:
                         self.logger.warning("Source {} returned an unusable page for {} (status {}, final url {}, redirects {}), skipping".format(
-                            source_location, search_term, resp.status_code, resp.url, [r.headers.get('Location') for r in resp.history]))
+                            source_location, stock_name, resp.status_code, resp.url, [r.headers.get('Location') for r in resp.history]))
                         continue
                     # place the data into the COLLECTED_DATA
                     modified_content = str(resp.content).replace('"', self.ETOUQ)
