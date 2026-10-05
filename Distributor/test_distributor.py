@@ -316,7 +316,7 @@ def test_distribution_sends_report(harness):
 
 def test_distribution_sends_apology_when_data_is_incomplete(harness):
     # Only one pull for GOOGL, so there is no yesterday's price to compare against
-    add_pulls(harness.db, [(1, 1, 100.0)])
+    add_pulls(harness.db, [(1, 1, get_time(0),100.0)])
 
     email = run_distribution(harness)
 
@@ -330,7 +330,7 @@ def test_distribution_sends_apology_when_data_is_incomplete(harness):
 
 
 def test_distribution_still_emails_when_ai_fails(harness):
-    add_pulls(harness.db, [(1, 1, 100.0), (2, 1, 110.0)])
+    add_pulls(harness.db, [(1, 1, get_time(0), 100.0), (2, 1, get_time(0), 110.0)])
     harness.genai.fail = True
 
     email = run_distribution(harness)
