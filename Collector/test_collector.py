@@ -137,7 +137,8 @@ def make_database():
     connection.execute("INSERT INTO DATA_SOURCES (source_location, extension, search_terms) VALUES (?, ?, ?)",
                        (SOURCE, EXTENSION, ",".join(TICKERS)))
     for ticker in TICKERS:
-        connection.execute("INSERT INTO STOCK (acronym) VALUES (?)", (ticker,))
+        acronym, market = ticker.split(":")[0], ticker.split(":")[1]
+        connection.execute("INSERT INTO STOCK (acronym, market) VALUES (?,?)", (acronym, market))
     return connection
 
 
@@ -207,6 +208,13 @@ def test_conduct_collection(collector_module, monkeypatch):
         if USER_AGENT:
             headers["User-Agent"] = USER_AGENT
             kwargs["headers"] = headers
+        headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+        })
+        kwargs["headers"] = headers
+        print(headers)
         resp = replayed_response(url, headers) if REPLAY_FILE else real_get(url, timeout=30, **kwargs)
         exchanges.append(resp)
         number = len(exchanges)

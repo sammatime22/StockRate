@@ -207,7 +207,7 @@ class Collector(stomp.ConnectionListener):
                         continue
                     # place the data into the COLLECTED_DATA
                     modified_content = str(resp.content).replace('"', self.ETOUQ)
-                    if len(stock_id) > 0:
+                    if stock_id is not None:
                         mariadb_cursor.execute(self.INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id, modified_content))
 
         # CLEANING
