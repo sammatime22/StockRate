@@ -118,8 +118,8 @@ class Orchestrator(stomp.ConnectionListener):
         -----------
         message_body: the body of the message received from the Collector
         '''
-        collector_responses_returned = collector_responses_returned + 1
-        if collector_responses_returned == total_active_collectors:
+        self.collector_responses_returned = collector_responses_returned + 1
+        if self.collector_responses_returned == self.total_active_collectors:
             # send message to kick off distributor
             self.logger.info("Received Collector response (at {:02}:{:02}z): {}".format(datetime.datetime.now().hour, datetime.datetime.now().minute, message_body))
             self.stats_to_post["stats"]["collection_stop"] = message_body["collection_stop"]
@@ -128,7 +128,7 @@ class Orchestrator(stomp.ConnectionListener):
             self.stats_to_post["stats"]["distribution_start"] = distribution_start
             self.current_state = self.OrchestratorState.AMID_DISTRIBUTION
             self.logger.info("Moving from Collection to Distribution at {}".format(datetime.datetime.now().timestamp()))
-            collector_responses_returned = 0
+            self.collector_responses_returned = 0
 
 
     async def handle_distributor_response(self, message_body):
