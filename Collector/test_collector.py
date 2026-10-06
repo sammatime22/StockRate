@@ -74,6 +74,7 @@ CREATE TABLE COLLECTED_DATA (
 CREATE TABLE CLEANED_DATA (
     data_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_id        INTEGER NOT NULL,
+    pull_date       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     pull_id         INTEGER NOT NULL,
     source_id       INTEGER NOT NULL,
     price           REAL NOT NULL,
@@ -214,7 +215,6 @@ def test_conduct_collection(collector_module, monkeypatch):
             'Accept-Language': 'en-US,en;q=0.9'
         })
         kwargs["headers"] = headers
-        print(headers)
         resp = replayed_response(url, headers) if REPLAY_FILE else real_get(url, timeout=30, **kwargs)
         exchanges.append(resp)
         number = len(exchanges)

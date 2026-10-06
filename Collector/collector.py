@@ -60,7 +60,7 @@ class Collector(stomp.ConnectionListener):
     GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
     GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
     GET_STOCKS_FOR_COLLECTOR_ID = "SELECT stock_id, stock_name, acronym, market FROM STOCK WHERE MOD(stock_id, {}) = {};"
-    INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES ({},{},{},{},{},{});"
+    INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES ({},{},\"{}\",{},{},{});"
     INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
 
     # Constants for currencies (currently just USD)
