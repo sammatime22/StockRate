@@ -199,7 +199,7 @@ class Collector(stomp.ConnectionListener):
                 stock_info = mariadb_cursor.fetchall()
                 for (stock_id, stock_name, acronym, market) in stock_info:
                     self.logger.info("Collecting data for stock {}".format(stock_name))
-                    resp = requests.get("https://{}/{}/{}:{}".format(source_location, extension, acronym, market))
+                    resp = requests.get("https://{}/{}/{}:{}".format(source_location, extension, acronym, market), headers=self.HEADERS)
                     time.sleep(self.AWAIT_TIME) # be polite
                     if resp.status_code != 200 or self.UNSUPPORTED_PAGE_MARKER in resp.content:
                         self.logger.warning("Source {} returned an unusable page for {} (status {}, final url {}, redirects {}), skipping".format(
