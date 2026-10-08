@@ -105,6 +105,10 @@ class FakeMariaDBCursor:
     def fetchall(self):
         return self.cursor.fetchall()
 
+    @property
+    def lastrowid(self):
+        return self.cursor.lastrowid
+
 
 class FakeMariaDBConnection:
     def __init__(self, sqlite_connection):

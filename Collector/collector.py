@@ -9,6 +9,7 @@ import datetime
 import json
 import logging
 import mariadb
+import os
 import re
 import requests
 import stomp
@@ -54,7 +55,7 @@ class Collector(stomp.ConnectionListener):
     ETOUQ = "etouq"
 
     # Constants for SQL queries
-    GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID = "SELECT pull_id, pull_date, dirty_data FROM COLLECTED_DATA WHERE source_id={} AND stock_id={} AND pull_date > SUBDATE(NOW(), 1);"
+    GET_COLLECTED_DATA_AT_NEWDAY_FOR_PULL_ID = "SELECT pull_date, dirty_data, stock_id, source_id FROM COLLECTED_DATA WHERE pull_id={};"
     GET_DATA_SOURCES = "SELECT source_id, source_location, extension FROM DATA_SOURCES;"
     GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
     GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
@@ -189,11 +190,9 @@ class Collector(stomp.ConnectionListener):
         # Alternatively, each collector could determine which stocks to collect based on ID plus some modulo operation
         mariadb_cursor.execute(self.GET_DATA_SOURCES)
         data_sources = mariadb_cursor.fetchall()
-        source_ids = []
-        stock_ids = []
+        pull_ids = []
         if len(data_sources) > 0:
             for (source_id, source_location, extension) in data_sources:
-                source_ids.append(source_id)
                 self.logger.info("Collecting data from source {} at {}".format(source_location, datetime.datetime.now().timestamp()))
                 # go through all search_terms
                 mariadb_cursor.execute(self.GET_STOCKS_FOR_COLLECTOR_ID.format(\
@@ -201,8 +200,6 @@ class Collector(stomp.ConnectionListener):
                     collector_config_config[self.TASKING][self.COLLECTOR_ID]))
                 stock_info = mariadb_cursor.fetchall()
                 for (stock_id, stock_name, acronym, market) in stock_info:
-                    if not stock_ids.__contains__(stock_id):
-                        stock_ids.append(stock_id)
                     self.logger.info("Collecting data for stock {}".format(stock_name))
                     resp = requests.get("https://{}/{}/{}:{}".format(source_location, extension, acronym, market), headers=self.HEADERS)
                     time.sleep(self.AWAIT_TIME) # be polite
@@ -214,23 +211,22 @@ class Collector(stomp.ConnectionListener):
                     modified_content = str(resp.content).replace('"', self.ETOUQ)
                     if stock_id is not None:
                         mariadb_cursor.execute(self.INSERT_INTO_COLLECTED_DATA.format(source_id, stock_id, modified_content))
+                        pull_ids.append(mariadb_cursor.lastrowid)
 
         # Go through stock IDs relative to the collector
-        for source_id in source_ids:
-            for stock_id in stock_ids:
-                # ...and get data from the past day that we collected
-                try:
-                    mariadb_cursor.execute(self.GET_COLLECTED_DATA_AT_NEWDAY_FOR_SOURCE_ID_AND_STOCK_ID.format(source_id, stock_id))
-                
-                    collected_data = mariadb_cursor.fetchall()
-                    for (pull_id, pull_date, dirty_data) in collected_data:
-                        # For the dirty data, clean it and insert it into the DB
-                        price, rate_of_change = self.cleaning_algorithm(dirty_data.replace(self.ETOUQ, '"'))
-                        time.sleep(self.AWAIT_TIME)
-                        mariadb_cursor.execute(self.INSERT_CLEAN_DATA.format(stock_id, pull_id, pull_date, source_id, price, rate_of_change))
-                        self.logger.info("Cleaned data for stock_id {} and source_id {} at {}".format(stock_id, source_id, datetime.datetime.now().timestamp()))
-                except Exception as e:
-                    self.logger.exception("Error seen during data cleaning: {}".format(e))
+        for pull_id in pull_ids:
+            # ...and get data from the past day that we collected
+            try:
+                mariadb_cursor.execute(self.GET_COLLECTED_DATA_AT_NEWDAY_FOR_PULL_ID.format(pull_id))
+                collected_data = mariadb_cursor.fetchall()
+                for (pull_date, dirty_data, stock_id, source_id) in collected_data:
+                    # For the dirty data, clean it and insert it into the DB
+                    price, rate_of_change = self.cleaning_algorithm(dirty_data.replace(self.ETOUQ, '"'))
+                    time.sleep(self.AWAIT_TIME)
+                    mariadb_cursor.execute(self.INSERT_CLEAN_DATA.format(stock_id, pull_id, pull_date, source_id, price, rate_of_change))
+                    self.logger.info("Cleaned data for stock_id {} and source_id {} at {}".format(stock_id, source_id, datetime.datetime.now().timestamp()))
+            except Exception as e:
+                self.logger.exception("Error seen during data cleaning: {}".format(e))
         self.stomp_connection.send("/topic/collection-reply", json.dumps({"collection_stop": datetime.datetime.now().timestamp()}))
         self.active = False
         self.logger.info("Finished collection and cleaning at {}".format(datetime.datetime.now().timestamp()))
@@ -280,6 +276,7 @@ if __name__ == "__main__":
     COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
     with open(COLLECTOR_CONFIG, "r") as collector_config_file:
         collector_config = yaml.safe_load(collector_config_file)
+        collector_config["tasking"]["collector_id"] = int(os.environ.get("COLLECCTOR_ID"))
         collector = Collector(collector_config) 
         stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
         collector_thread = threading.Thread(target=collector.main_loop)

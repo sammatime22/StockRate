@@ -118,7 +118,7 @@ class Orchestrator(stomp.ConnectionListener):
         -----------
         message_body: the body of the message received from the Collector
         '''
-        self.collector_responses_returned = collector_responses_returned + 1
+        self.collector_responses_returned = self.collector_responses_returned + 1
         if self.collector_responses_returned == self.total_active_collectors:
             # send message to kick off distributor
             self.logger.info("Received Collector response (at {:02}:{:02}z): {}".format(datetime.datetime.now().hour, datetime.datetime.now().minute, message_body))
