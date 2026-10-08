@@ -276,7 +276,7 @@ if __name__ == "__main__":
     COLLECTOR_CONFIG = "/config-dir/collector-config-private.yaml"
     with open(COLLECTOR_CONFIG, "r") as collector_config_file:
         collector_config = yaml.safe_load(collector_config_file)
-        collector_config["tasking"]["collector_id"] = int(os.environ.get("COLLECCTOR_ID"))
+        collector_config["tasking"]["collector_id"] = int(os.environ.get("COLLECTOR_ID"))
         collector = Collector(collector_config) 
         stomp_factory(collector, COLLECTOR_ID, collector_config["stomp_config"])
         collector_thread = threading.Thread(target=collector.main_loop)
