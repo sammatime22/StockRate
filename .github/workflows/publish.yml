@@ -2,7 +2,7 @@ name: Publish Containers
 on: 
   push:
     tags:
-      - 'latest'
+      - '*'
 
 
 jobs:
@@ -19,14 +19,14 @@ jobs:
       - name: Build Docker Images for All StockRate Projects
         run: |
           cd Factory
-          docker build . -t ghcr.io/sammatime22/stockrate/factory:latest
-          docker push ghcr.io/sammatime22/stockrate/factory:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/factory:${{ github.ref_name }}
+          docker push ghcr.io/sammatime22/stockrate/factory:${{ github.ref_name }}
           cd ../Collector
-          docker build . -t ghcr.io/sammatime22/stockrate/collector:latest
-          docker push ghcr.io/sammatime22/stockrate/collector:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/collector:${{ github.ref_name }}
+          docker push ghcr.io/sammatime22/stockrate/collector:${{ github.ref_name }}
           cd ../Distributor
-          docker build . -t ghcr.io/sammatime22/stockrate/distributor:latest
-          docker push ghcr.io/sammatime22/stockrate/distributor:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/distributor:${{ github.ref_name }}
+          docker push ghcr.io/sammatime22/stockrate/distributor:${{ github.ref_name }}
           cd ../Orchestrator
-          docker build . -t ghcr.io/sammatime22/stockrate/orchestrator:latest
-          docker push ghcr.io/sammatime22/stockrate/orchestrator:latest
+          docker build . -t ghcr.io/sammatime22/stockrate/orchestrator:${{ github.ref_name }}
+          docker push ghcr.io/sammatime22/stockrate/orchestrator:${{ github.ref_name }}
