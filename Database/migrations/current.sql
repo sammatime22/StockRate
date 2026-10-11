@@ -30,7 +30,6 @@ CREATE TABLE DATA_SOURCES (
     source_id        SMALLINT(5)    NOT NULL AUTO_INCREMENT,
     source_location  VARCHAR(512)   NOT NULL,
     extension        VARCHAR(128)   NULL,
-    search_terms     TEXT           NULL,
     notes            VARCHAR(512)   NULL,
     PRIMARY KEY (source_id)
 );
@@ -40,8 +39,6 @@ CREATE TABLE STOCK (
     stock_name      VARCHAR(150)   NOT NULL,
     acronym         VARCHAR(30)     NOT NULL,
     market          VARCHAR(30)    NOT NULL,
-    price           FLOAT(10)      NOT NULL,
-    rate_of_change  FLOAT(10)      NOT NULL,
     PRIMARY KEY (stock_id)
 );
 
