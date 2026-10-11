@@ -57,9 +57,6 @@ class Collector(stomp.ConnectionListener):
     # Constants for SQL queries
     GET_COLLECTED_DATA_AT_NEWDAY_FOR_PULL_ID = "SELECT pull_date, dirty_data, stock_id, source_id FROM COLLECTED_DATA WHERE pull_id={};"
     GET_DATA_SOURCES = "SELECT source_id, source_location, extension FROM DATA_SOURCES;"
-    GET_STOCK_IDS = "SELECT stock_id FROM STOCK;"
-    GET_SOURCE_IDS = "SELECT source_id FROM DATA_SOURCES;"
-    GET_STOCK_ID_FOR_STOCK_NAME = "SELECT stock_id FROM STOCK WHERE acronym=\"{}\";"
     GET_STOCKS_FOR_COLLECTOR_ID = "SELECT stock_id, stock_name, acronym, market FROM STOCK WHERE MOD(stock_id, {}) = {};"
     INSERT_CLEAN_DATA = "INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES ({},{},\"{}\",{},{},{});"
     INSERT_INTO_COLLECTED_DATA = "INSERT INTO COLLECTED_DATA (source_id, stock_id, dirty_data) VALUES ({},{},\"{}\");"
@@ -186,8 +183,6 @@ class Collector(stomp.ConnectionListener):
 
         # COLLECTION
         # go through all DATA_SOURCES
-        # TODO: Somehow we need the Orchestrator to tell us what stocks this particular Collector should collect
-        # Alternatively, each collector could determine which stocks to collect based on ID plus some modulo operation
         mariadb_cursor.execute(self.GET_DATA_SOURCES)
         data_sources = mariadb_cursor.fetchall()
         pull_ids = []
