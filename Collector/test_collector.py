@@ -52,8 +52,10 @@ OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "te
 
 SCHEMA = """
 CREATE TABLE STOCK (
-    stock_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    acronym   TEXT
+    stock_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    acronym      TEXT,
+    stock_name   TEXT,
+    market       TEXT
 );
 CREATE TABLE DATA_SOURCES (
     source_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +74,7 @@ CREATE TABLE COLLECTED_DATA (
 CREATE TABLE CLEANED_DATA (
     data_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_id        INTEGER NOT NULL,
+    pull_date       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     pull_id         INTEGER NOT NULL,
     source_id       INTEGER NOT NULL,
     price           REAL NOT NULL,
@@ -101,6 +104,10 @@ class FakeMariaDBCursor:
 
     def fetchall(self):
         return self.cursor.fetchall()
+
+    @property
+    def lastrowid(self):
+        return self.cursor.lastrowid
 
 
 class FakeMariaDBConnection:
@@ -135,7 +142,8 @@ def make_database():
     connection.execute("INSERT INTO DATA_SOURCES (source_location, extension, search_terms) VALUES (?, ?, ?)",
                        (SOURCE, EXTENSION, ",".join(TICKERS)))
     for ticker in TICKERS:
-        connection.execute("INSERT INTO STOCK (acronym) VALUES (?)", (ticker,))
+        acronym, market = ticker.split(":")[0], ticker.split(":")[1]
+        connection.execute("INSERT INTO STOCK (acronym, market) VALUES (?,?)", (acronym, market))
     return connection
 
 
@@ -205,6 +213,12 @@ def test_conduct_collection(collector_module, monkeypatch):
         if USER_AGENT:
             headers["User-Agent"] = USER_AGENT
             kwargs["headers"] = headers
+        headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+        })
+        kwargs["headers"] = headers
         resp = replayed_response(url, headers) if REPLAY_FILE else real_get(url, timeout=30, **kwargs)
         exchanges.append(resp)
         number = len(exchanges)
@@ -216,7 +230,7 @@ def test_conduct_collection(collector_module, monkeypatch):
 
     monkeypatch.setattr(collector_module.requests, "get", recording_get)
 
-    config = {"maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"}}
+    config = {"maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"}, "tasking":{"collector_id": 0, "total_collectors": 1}}
     collector = collector_module.Collector(config)
     collector.AWAIT_TIME = 0
     stomp_connection = FakeStompConnection()

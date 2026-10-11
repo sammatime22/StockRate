@@ -54,6 +54,7 @@ CREATE TABLE CLEANED_DATA (
     data_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_id        INTEGER NOT NULL,
     pull_id         INTEGER NOT NULL,
+    pull_date       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     source_id       INTEGER NOT NULL,
     price           REAL NOT NULL,
     rate_of_change  REAL NOT NULL
@@ -70,6 +71,7 @@ STOCKS = [
 ]
 USERS = ["first@example.com", "second@example.com"]
 
+DB_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 class FakeMariaDBCursor:
     '''
@@ -205,6 +207,9 @@ def harness(monkeypatch, request):
     sqlite_connection.executescript(SCHEMA)
     sqlite_connection.executemany("INSERT INTO STOCK (stock_id, stock_name, acronym) VALUES (?, ?, ?)", STOCKS)
     sqlite_connection.executemany("INSERT INTO USER (email) VALUES (?)", [(user,) for user in USERS])
+    sqlite_connection.create_function("NOW", 0, lambda: datetime.datetime.now(datetime.timezone.utc).strftime(DB_TIME_FORMAT))
+    sqlite_connection.create_function("SUBDATE", 2, lambda date, days: (
+        datetime.datetime.strptime(date, DB_TIME_FORMAT) - datetime.timedelta(days=days)).strftime(DB_TIME_FORMAT))
 
     fake_mariadb = types.ModuleType("mariadb")
     fake_mariadb.connect = lambda **kwargs: FakeMariaDBConnection(sqlite_connection)
@@ -250,8 +255,8 @@ def add_pulls(db, pulls):
     '''
     Inserts CLEANED_DATA rows; pulls is a list of (pull_id, stock_id, price).
     '''
-    db.executemany("INSERT INTO CLEANED_DATA (stock_id, pull_id, source_id, price, rate_of_change) VALUES (?, ?, 1, ?, 0)",
-                   [(stock_id, pull_id, price) for (pull_id, stock_id, price) in pulls])
+    db.executemany("INSERT INTO CLEANED_DATA (stock_id, pull_id, pull_date, source_id, price, rate_of_change) VALUES (?, ?, ?, 1, ?, 0)",
+                   [(stock_id, pull_id, pull_date, price) for (pull_id, stock_id, pull_date, price) in pulls])
 
 
 def run_distribution(harness):
@@ -274,10 +279,14 @@ def assert_finished(harness):
     assert harness.genai.api_key == "test-gemini-key"
 
 
+def get_time(delta):
+    return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=delta)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def test_distribution_sends_report(harness):
     # Yesterday's pull (1-3) then today's pull (4-6)
-    add_pulls(harness.db, [(1, 1, 100.0), (2, 2, 200.0), (3, 3, 50.0),
-                           (4, 1, 110.0), (5, 2, 150.0), (6, 3, 50.0)])
+    add_pulls(harness.db, [(1, 1, get_time(1), 100.0), (2, 2, get_time(1), 200.0), (3, 3, get_time(1), 50.0),
+                           (4, 1, get_time(0), 110.0), (5, 2, get_time(0), 150.0), (6, 3, get_time(0), 50.0)])
 
     email = run_distribution(harness)
 
@@ -307,7 +316,7 @@ def test_distribution_sends_report(harness):
 
 def test_distribution_sends_apology_when_data_is_incomplete(harness):
     # Only one pull for GOOGL, so there is no yesterday's price to compare against
-    add_pulls(harness.db, [(1, 1, 100.0)])
+    add_pulls(harness.db, [(1, 1, get_time(0),100.0)])
 
     email = run_distribution(harness)
 
@@ -321,7 +330,7 @@ def test_distribution_sends_apology_when_data_is_incomplete(harness):
 
 
 def test_distribution_still_emails_when_ai_fails(harness):
-    add_pulls(harness.db, [(1, 1, 100.0), (2, 1, 110.0)])
+    add_pulls(harness.db, [(1, 1, get_time(0), 100.0), (2, 1, get_time(0), 110.0)])
     harness.genai.fail = True
 
     email = run_distribution(harness)

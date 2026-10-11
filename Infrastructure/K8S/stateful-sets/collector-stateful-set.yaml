@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: collector
+spec:
+  serviceName: "collector"
+  replicas: 10
+  selector:
+    matchLabels:
+      app: collector
+  template:
+    metadata:
+      labels:
+        app: collector
+    spec:
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: collector
+        image: ghcr.io/sammatime22/stockrate/collector:test
+        imagePullPolicy: Always
+        env:
+        - name: COLLECTOR_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+        resources:
+          limits:
+            ephemeral-storage: "1Gi"
+        volumeMounts:
+          - name: config-volume
+            mountPath: /config-dir
+      volumes:
+        - name: config-volume
+          configMap:
+            name: collector-config
