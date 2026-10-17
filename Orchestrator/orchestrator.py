@@ -36,6 +36,8 @@ class Orchestrator(stomp.ConnectionListener):
     SEND_TIME = 283 # When we get past 00:00z, and provided we are not still in Collection, we will kick off Collection
     WAIT_TIME = 60 # Seconds
 
+    FAILOVER = 12 * 60 # 12 Hours in Mins
+
     # Variables for MatchaDB related things
     matchadb_url = None
     stats_to_post = None
@@ -196,8 +198,9 @@ class Orchestrator(stomp.ConnectionListener):
                     self.logger.info("Sent Collection Request at {}".format(datetime.datetime.now().timestamp()))
                     self.stats_to_post["stats"]["collection_start"] = collection_start
                     self.current_state = self.OrchestratorState.AMID_COLLECTION
-                else:
-                    self.logger.info("something could be wrong..")
+                elif current_time_mins == self.SEND_TIME + self.FAILOVER:
+                    self.current_state = self.OrchestratorState.AWAITING
+                    self.logger.info("something could be wrong, resetting state.")
             # await the "wait time"
             time.sleep(self.WAIT_TIME)
 
