@@ -1,5 +1,6 @@
 # A program used to send collected data via email.
 # sammatime22, 2024
+from analyzer import format_findings
 from factory import stomp_factory
 from logging.handlers import RotatingFileHandler
 import asyncio
@@ -93,29 +94,30 @@ class Distributor(stomp.ConnectionListener):
         return conn.cursor()
 
 
-    def format_findings(self, findings, mariadb_cursor):
-        '''
-        Properly formats the data retrieved from the DB into a CSV format
-        '''
-        try:
-            contents = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference\n"
-            findings_dict = {}
-            for (stock_id, price) in findings:
-                # add findings to findings_dict list
-                if findings_dict.get(stock_id) == None:
-                    findings_dict[stock_id] = []
-                findings_dict[stock_id].append(price)
+    # To be imported into analyzer.py (or replaced)
+    # def format_findings(self, findings, mariadb_cursor):
+    #     '''
+    #     Properly formats the data retrieved from the DB into a CSV format
+    #     '''
+    #     try:
+    #         contents = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference\n"
+    #         findings_dict = {}
+    #         for (stock_id, price) in findings:
+    #             # add findings to findings_dict list
+    #             if findings_dict.get(stock_id) == None:
+    #                 findings_dict[stock_id] = []
+    #             findings_dict[stock_id].append(price)
             
-            # run calculations on findings, putting this in CSV format
-            for key, value in findings_dict.items():
-                mariadb_cursor.execute(self.SELECT_STOCK_NAME_AND_ACRONYM.format(key))
-                stock_of_interest_data = mariadb_cursor.fetchall()
-                for (stock_name, stock_acronym) in stock_of_interest_data:
-                    contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
-            return contents
-        except Exception as e:
-            traceback.print_exc()
-            return None
+    #         # run calculations on findings, putting this in CSV format
+    #         for key, value in findings_dict.items():
+    #             mariadb_cursor.execute(self.SELECT_STOCK_NAME_AND_ACRONYM.format(key))
+    #             stock_of_interest_data = mariadb_cursor.fetchall()
+    #             for (stock_name, stock_acronym) in stock_of_interest_data:
+    #                 contents = contents + "{},{},{},{},{},{}\n".format(stock_name, stock_acronym, value[1], value[0], value[0] - value[1], (value[0] - value[1])/value[1])
+    #         return contents
+    #     except Exception as e:
+    #         traceback.print_exc()
+    #         return None
 
 
     async def conduct_distribution(self):
@@ -141,21 +143,21 @@ class Distributor(stomp.ConnectionListener):
 
         # check and gather the stock data from one pull ago and the most recent pull
         mariadb_cursor.execute(self.SELECT_ALL_DATA_FROM_PAST_DAYS)
-        data = self.format_findings(mariadb_cursor.fetchall(), mariadb_cursor)
+        blurb = format_findings(mariadb_cursor.fetchall(), mariadb_cursor, distributor_config_config)
 
         # ask AI for some insight
-        if data is not None:
-            self.logger.info("Data could be pulled, and we will attempt to query the AI agent for insights at {}".format(datetime.datetime.now().timestamp()))
-            query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
+        if blurb is not None:
+            # self.logger.info("Data could be pulled, and we will attempt to query the AI agent for insights at {}".format(datetime.datetime.now().timestamp()))
+            # query = "Can you please tell me out of this data which three stocks had the biggest change?\n" + data
 
-            # put AI response in email
-            ai_response = None
-            try:
-                ai_response = model.generate_content(query)
-                ai_response = ai_response.text
-            except Exception as e:
-                ai_response = "An error occurred in querying the AI agent."
-                traceback.print_exc()
+            # # put AI response in email
+            # ai_response = None
+            # try:
+            #     ai_response = model.generate_content(query)
+            #     ai_response = ai_response.text
+            # except Exception as e:
+            #     ai_response = "An error occurred in querying the AI agent."
+            #     traceback.print_exc()
 
             # get recipients from DB
             mariadb_cursor.execute(self.SELECT_USERS)
@@ -165,15 +167,15 @@ class Distributor(stomp.ConnectionListener):
                 recipients.append(recipient[0])
 
             # put content in .csv
-            csv_content = open(distributor_config_config[self.EMAIL_CONFIG][self.ATTACHMENT], "w+")
-            csv_content.truncate(0) # erase data before writing
-            csv_content.write(data)
-            csv_content.close()
+            # csv_content = open(distributor_config_config[self.EMAIL_CONFIG][self.ATTACHMENT], "w+")
+            # csv_content.truncate(0) # erase data before writing
+            # csv_content.write(data)
+            # csv_content.close()
             yag = yagmail.SMTP(distributor_config_config[self.EMAIL_CONFIG][self.EMAIL_ADDRESS], oauth2_file=distributor_config_config[self.EMAIL_CONFIG][self.OAUTH2_FILE])
             yag.send(
                 to=recipients,
                 subject="Todays Stock Data " + str(datetime.datetime.now()),
-                contents=ai_response,
+                contents=blurb,
                 attachments=[distributor_config_config[self.EMAIL_CONFIG][self.ATTACHMENT]]
             )
         else:
