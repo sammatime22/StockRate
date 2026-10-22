@@ -1,6 +1,6 @@
 # A program used to send collected data via email.
 # sammatime22, 2024
-from analyzer import format_findings
+from analyzer import run_analyze
 from factory import stomp_factory
 from logging.handlers import RotatingFileHandler
 import asyncio
@@ -143,7 +143,7 @@ class Distributor(stomp.ConnectionListener):
 
         # check and gather the stock data from one pull ago and the most recent pull
         mariadb_cursor.execute(self.SELECT_ALL_DATA_FROM_PAST_DAYS)
-        blurb = format_findings(mariadb_cursor.fetchall(), mariadb_cursor, distributor_config_config)
+        blurb = run_analyze(mariadb_cursor.fetchall(), mariadb_cursor, distributor_config_config)
 
         # ask AI for some insight
         if blurb is not None:
