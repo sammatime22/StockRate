@@ -12,6 +12,9 @@ ATTACHMENT = "attachment"
 # SQL queries
 SELECT_STOCK_NAME_AND_ACRONYM = "SELECT stock_name, acronym FROM STOCK WHERE stock_id={};"
 
+# A price of -1 means the price is missing (-1 == -1.0, so both forms match)
+MISSING_PRICE = -1
+
 # AI settings
 GEMINI_MODEL = "gemini-2.0-flash"
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
@@ -85,8 +88,9 @@ def format_findings(mariadb_data):
     Returns:
     -----------
       - a formatted set of findings: a list of dicts, one per stock, with stock_id, stock_name, acronym,
-        yesterday_price, today_price, difference and rate_of_change. Stocks without two prices
-        (or with a previous price of 0) are left out, since no rate of change can be worked out.
+        yesterday_price, today_price, difference and rate_of_change. Stocks without two prices,
+        with a previous price of 0, or with either price of -1 (a missing price) are left out,
+        so they appear in neither the xlsx nor the blurb.
     '''
     prices_by_stock = {}
     for (stock_id, price) in mariadb_data:
@@ -94,9 +98,11 @@ def format_findings(mariadb_data):
 
     findings = []
     for stock_id, prices in prices_by_stock.items():
-        if len(prices) < 2 or prices[1] == 0:
+        if len(prices) < 2:
             continue
         today_price, yesterday_price = prices[0], prices[1]
+        if MISSING_PRICE in (today_price, yesterday_price) or yesterday_price == 0:
+            continue
         difference = today_price - yesterday_price
         findings.append({
             "stock_id": stock_id,

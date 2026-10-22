@@ -99,8 +99,10 @@ def test_run_analyze(monkeypatch, tmp_path):
 
 
 def test_format_findings():
-    # Stock 4 has only one price and stock 5 had a price of 0, so neither can have a rate of change
-    findings = analyzer.format_findings(MARIADB_DATA + [(4, 10.0), (5, 3.0), (5, 0.0)])
+    # Stock 4 has only one price and stock 5 had a price of 0, so neither can have a rate of change.
+    # Stocks 6 and 7 have a missing (-1) old or new price, and stock 8 uses -1 as an int, so all are left out.
+    findings = analyzer.format_findings(MARIADB_DATA + [(4, 10.0), (5, 3.0), (5, 0.0), (6, -1.0), (6, 20.0),
+                                                        (7, 30.0), (7, -1.0), (8, -1), (8, 40.0)])
 
     assert findings == [
         {"stock_id": 3, "stock_name": None, "acronym": None, "yesterday_price": 50.0, "today_price": 50.0,
