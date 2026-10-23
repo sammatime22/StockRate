@@ -7,12 +7,12 @@
 #
 #   test-output/<test name>/gemini_<n>.txt   the question asked of Gemini and its answer
 #   test-output/<test name>/email_<n>.txt    who the email would go to, subject, body and attachments
-#   test-output/<test name>/report.csv       the CSV attachment the Distributor wrote
+#   test-output/<test name>/report.xlsx      the xlsx attachment the Distributor wrote (open it in Excel/Numbers)
 #   test-output/<test name>/distributor.log  the Distributor's own log
 #   test-output/<test name>/stockrate.db     the SQLite database after the run (open it with `sqlite3 stockrate.db`)
 #
 # Setup on iSH (Alpine):
-#   apk add python3 py3-pytest py3-requests py3-yaml
+#   apk add python3 py3-pytest py3-requests py3-yaml py3-openpyxl
 #
 # Run from the Distributor directory:
 #   python3 -m pytest -s test_distributor.py
@@ -32,6 +32,7 @@ import sqlite3
 import sys
 import types
 
+import openpyxl
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +43,7 @@ OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "te
 
 CANNED_AI_ANSWER = "Canned AI answer (set STOCKRATE_GEMINI_KEY to ask Gemini for real)."
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
-CSV_HEADER = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference"
+XLSX_HEADER = ("Stock Name", "Stock Acronym", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference")
 
 SCHEMA = """
 CREATE TABLE STOCK (
@@ -161,7 +162,8 @@ class FakeGenAI:
 
 class FakeYagmail:
     '''
-    Stands in for yagmail, recording each email (and its attachments' contents) instead of sending it.
+    Stands in for yagmail, recording each email (and its xlsx attachments' sheets) instead of sending it.
+    Each attachment is recorded as {sheet name: [row tuples]}.
     '''
 
     def __init__(self, out_dir):
@@ -177,14 +179,16 @@ class FakeYagmail:
             def send(self, to=None, subject=None, contents=None, attachments=None):
                 attached = {}
                 for path in attachments or []:
-                    with open(path) as attachment:
-                        attached[path] = attachment.read()
+                    workbook = openpyxl.load_workbook(path)
+                    attached[path] = {sheet.title: list(sheet.iter_rows(values_only=True)) for sheet in workbook}
                 email = {"from": user, "to": to, "subject": subject, "contents": contents, "attachments": attached}
                 fake.sent.append(email)
                 with open(os.path.join(fake.out_dir, "email_{}.txt".format(len(fake.sent))), "w") as out:
                     out.write("From: {}\nTo: {}\nSubject: {}\n\n{}\n".format(user, ", ".join(to or []), subject, contents))
-                    for path, content in attached.items():
-                        out.write("\n=== attachment {} ===\n{}".format(path, content))
+                    for path, sheets in attached.items():
+                        out.write("\n=== attachment {} ===\n".format(path))
+                        for title, rows in sheets.items():
+                            out.write("--- sheet {} ---\n{}\n".format(title, "\n".join(str(row) for row in rows)))
 
         return SMTP()
 
@@ -229,13 +233,15 @@ def harness(monkeypatch, request):
     for name, module in [("mariadb", fake_mariadb), ("stomp", fake_stomp), ("factory", fake_factory),
                          ("google", fake_google), ("google.generativeai", fake_genai), ("yagmail", fake_yagmail)]:
         monkeypatch.setitem(sys.modules, name, module)
+    # re-import analyzer too, so it picks up this test's fake Gemini
     monkeypatch.delitem(sys.modules, "distributor", raising=False)
+    monkeypatch.delitem(sys.modules, "analyzer", raising=False)
 
     module = importlib.import_module("distributor")
     config = {
         "maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"},
         "google_gemini_config": {"my_key": "test-gemini-key"},
-        "email_config": {"attachment": os.path.join(out_dir, "report.csv"), "email_address": "stockrate@example.com",
+        "email_config": {"attachment": os.path.join(out_dir, "report.xlsx"), "email_address": "stockrate@example.com",
                          "oauth2_file": "oauth2.json"},
     }
     distributor = module.Distributor(config)
@@ -290,19 +296,22 @@ def test_distribution_sends_report(harness):
 
     email = run_distribution(harness)
 
-    expected_rows = {
-        "Alphabet Inc Class A,GOOGL:NASDAQ,100.0,110.0,10.0,0.1",
-        "Apple Inc,AAPL:NASDAQ,200.0,150.0,-50.0,-0.25",
-        "Microsoft Corp,MSFT:NASDAQ,50.0,50.0,0.0,0.0",
-    }
-    with open(harness.config["email_config"]["attachment"]) as report:
-        csv_lines = report.read().splitlines()
-    assert csv_lines[0] == CSV_HEADER
-    assert set(csv_lines[1:]) == expected_rows
+    # Biggest gainer first, biggest loser last
+    expected_rows = [
+        XLSX_HEADER,
+        ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1),
+        ("Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0, 0.0, 0.0),
+        ("Apple Inc", "AAPL:NASDAQ", 200.0, 150.0, -50.0, -0.25),
+    ]
+    workbook = openpyxl.load_workbook(harness.config["email_config"]["attachment"])
+    assert workbook.sheetnames == ["Stock Data", "Insight"]
+    assert list(workbook["Stock Data"].iter_rows(values_only=True)) == expected_rows
 
     assert len(harness.genai.questions) == 1
-    assert "which three stocks had the biggest change" in harness.genai.questions[0]
-    assert all(row in harness.genai.questions[0] for row in expected_rows)
+    question = harness.genai.questions[0]
+    assert "top three gainers and top three losers" in question
+    assert "Alphabet Inc Class A (GOOGL:NASDAQ): 100.0 -> 110.0 (+10.00%)" in question
+    assert "Apple Inc (AAPL:NASDAQ): 200.0 -> 150.0 (-25.00%)" in question
 
     assert len(harness.yag.sent) == 1
     assert email["to"] == USERS
@@ -310,7 +319,10 @@ def test_distribution_sends_report(harness):
     assert email["contents"] and email["contents"] != AI_ERROR_ANSWER
     if not GEMINI_KEY:
         assert email["contents"] == CANNED_AI_ANSWER
-    assert list(email["attachments"].values()) == ["\n".join(csv_lines) + "\n"]
+    sheets = list(email["attachments"].values())[0]
+    assert sheets["Stock Data"] == expected_rows
+    # the Insight sheet holds the blurb one line per row (blank lines come back as empty cells)
+    assert [row[0] for row in sheets["Insight"] if row[0]] == [line for line in email["contents"].splitlines() if line]
     assert_finished(harness)
 
 
@@ -337,5 +349,7 @@ def test_distribution_still_emails_when_ai_fails(harness):
 
     assert email["subject"].startswith("Todays Stock Data ")
     assert email["contents"] == AI_ERROR_ANSWER
-    assert list(email["attachments"].values())[0].startswith(CSV_HEADER)
+    sheets = list(email["attachments"].values())[0]
+    assert sheets["Stock Data"] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1)]
+    assert sheets["Insight"] == [(AI_ERROR_ANSWER,)]
     assert_finished(harness)
