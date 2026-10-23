@@ -65,11 +65,30 @@ CREATE TABLE USER (
 );
 """
 
-STOCKS = [
-    (1, "Alphabet Inc Class A", "GOOGL:NASDAQ"),
-    (2, "Apple Inc", "AAPL:NASDAQ"),
-    (3, "Microsoft Corp", "MSFT:NASDAQ"),
+# (stock_id, stock_name, acronym, yesterday's price, today's price); every rate of change is different
+PRICED_STOCKS = [
+    (1, "Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0),      # +10%
+    (2, "Apple Inc", "AAPL:NASDAQ", 200.0, 150.0),                  # -25%
+    (3, "Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0),               # 0%
+    (4, "Amazon.com Inc", "AMZN:NASDAQ", 180.0, 189.0),             # +5%
+    (5, "NVIDIA Corp", "NVDA:NASDAQ", 120.0, 138.0),                # +15%
+    (6, "Meta Platforms Inc", "META:NASDAQ", 500.0, 490.0),         # -2%
+    (7, "Tesla Inc", "TSLA:NASDAQ", 250.0, 200.0),                  # -20%
+    (8, "Netflix Inc", "NFLX:NASDAQ", 600.0, 612.0),                # +2%
+    (9, "Advanced Micro Devices Inc", "AMD:NASDAQ", 160.0, 164.0),  # +2.5%
+    (10, "Intel Corp", "INTC:NASDAQ", 30.0, 27.0),                  # -10%
+    (11, "International Business Machines Corp", "IBM:NYSE", 200.0, 207.0),  # +3.5%
+    (12, "Oracle Corp", "ORCL:NYSE", 140.0, 133.0),                 # -5%
+    (13, "Salesforce Inc", "CRM:NYSE", 300.0, 324.0),               # +8%
+    (14, "Adobe Inc", "ADBE:NASDAQ", 500.0, 470.0),                 # -6%
+    (15, "PayPal Holdings Inc", "PYPL:NASDAQ", 80.0, 79.0),         # -1.25%
+    (16, "Uber Technologies Inc", "UBER:NYSE", 70.0, 84.0),         # +20%
+    (17, "Walt Disney Co", "DIS:NYSE", 100.0, 97.0),                # -3%
+    (18, "Coca-Cola Co", "KO:NYSE", 200.0, 202.0),                  # +1%
+    (19, "JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0),          # -8%
+    (20, "Walmart Inc", "WMT:NYSE", 100.0, 104.0),                  # +4%
 ]
+STOCKS = [(stock_id, name, acronym) for (stock_id, name, acronym, _, _) in PRICED_STOCKS]
 USERS = ["first@example.com", "second@example.com"]
 
 DB_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -290,17 +309,35 @@ def get_time(delta):
 
 
 def test_distribution_sends_report(harness):
-    # Yesterday's pull (1-3) then today's pull (4-6)
-    add_pulls(harness.db, [(1, 1, get_time(1), 100.0), (2, 2, get_time(1), 200.0), (3, 3, get_time(1), 50.0),
-                           (4, 1, get_time(0), 110.0), (5, 2, get_time(0), 150.0), (6, 3, get_time(0), 50.0)])
+    # Yesterday's pull (1-20) then today's pull (21-40)
+    count = len(PRICED_STOCKS)
+    add_pulls(harness.db, [(stock_id, stock_id, get_time(1), yesterday) for (stock_id, _, _, yesterday, _) in PRICED_STOCKS] +
+                          [(count + stock_id, stock_id, get_time(0), today) for (stock_id, _, _, _, today) in PRICED_STOCKS])
 
     email = run_distribution(harness)
 
     # Biggest gainer first, biggest loser last
     expected_rows = [
         XLSX_HEADER,
+        ("Uber Technologies Inc", "UBER:NYSE", 70.0, 84.0, 14.0, 0.2),
+        ("NVIDIA Corp", "NVDA:NASDAQ", 120.0, 138.0, 18.0, 0.15),
         ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1),
+        ("Salesforce Inc", "CRM:NYSE", 300.0, 324.0, 24.0, 0.08),
+        ("Amazon.com Inc", "AMZN:NASDAQ", 180.0, 189.0, 9.0, 0.05),
+        ("Walmart Inc", "WMT:NYSE", 100.0, 104.0, 4.0, 0.04),
+        ("International Business Machines Corp", "IBM:NYSE", 200.0, 207.0, 7.0, 0.035),
+        ("Advanced Micro Devices Inc", "AMD:NASDAQ", 160.0, 164.0, 4.0, 0.025),
+        ("Netflix Inc", "NFLX:NASDAQ", 600.0, 612.0, 12.0, 0.02),
+        ("Coca-Cola Co", "KO:NYSE", 200.0, 202.0, 2.0, 0.01),
         ("Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0, 0.0, 0.0),
+        ("PayPal Holdings Inc", "PYPL:NASDAQ", 80.0, 79.0, -1.0, -0.0125),
+        ("Meta Platforms Inc", "META:NASDAQ", 500.0, 490.0, -10.0, -0.02),
+        ("Walt Disney Co", "DIS:NYSE", 100.0, 97.0, -3.0, -0.03),
+        ("Oracle Corp", "ORCL:NYSE", 140.0, 133.0, -7.0, -0.05),
+        ("Adobe Inc", "ADBE:NASDAQ", 500.0, 470.0, -30.0, -0.06),
+        ("JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0, -12.0, -0.08),
+        ("Intel Corp", "INTC:NASDAQ", 30.0, 27.0, -3.0, -0.1),
+        ("Tesla Inc", "TSLA:NASDAQ", 250.0, 200.0, -50.0, -0.2),
         ("Apple Inc", "AAPL:NASDAQ", 200.0, 150.0, -50.0, -0.25),
     ]
     workbook = openpyxl.load_workbook(harness.config["email_config"]["attachment"])
@@ -310,8 +347,11 @@ def test_distribution_sends_report(harness):
     assert len(harness.genai.questions) == 1
     question = harness.genai.questions[0]
     assert "top three gainers and top three losers" in question
-    assert "Alphabet Inc Class A (GOOGL:NASDAQ): 100.0 -> 110.0 (+10.00%)" in question
-    assert "Apple Inc (AAPL:NASDAQ): 200.0 -> 150.0 (-25.00%)" in question
+    gainers, losers = question.split("Top losers:")
+    assert all(name in gainers for name in ["Uber Technologies Inc", "NVIDIA Corp", "Alphabet Inc Class A"])
+    assert all(name in losers for name in ["Apple Inc", "Tesla Inc", "Intel Corp"])
+    # only the top three of each are asked about
+    assert "Salesforce" not in question and "JPMorgan" not in question
 
     assert len(harness.yag.sent) == 1
     assert email["to"] == USERS

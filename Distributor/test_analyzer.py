@@ -27,14 +27,39 @@ if "google.generativeai" not in sys.modules:
 
 import analyzer
 
-STOCK_NAMES = {
-    1: ("Alphabet Inc Class A", "GOOGL:NASDAQ"),
-    2: ("Apple Inc", "AAPL:NASDAQ"),
-    3: ("Microsoft Corp", "MSFT:NASDAQ"),
-}
+# (stock_id, stock_name, acronym, yesterday's price, today's price); every rate of change is different
+STOCKS = [
+    (1, "Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0),      # +10%
+    (2, "Apple Inc", "AAPL:NASDAQ", 200.0, 150.0),                  # -25%
+    (3, "Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0),               # 0%
+    (4, "Amazon.com Inc", "AMZN:NASDAQ", 180.0, 189.0),             # +5%
+    (5, "NVIDIA Corp", "NVDA:NASDAQ", 120.0, 138.0),                # +15%
+    (6, "Meta Platforms Inc", "META:NASDAQ", 500.0, 490.0),         # -2%
+    (7, "Tesla Inc", "TSLA:NASDAQ", 250.0, 200.0),                  # -20%
+    (8, "Netflix Inc", "NFLX:NASDAQ", 600.0, 612.0),                # +2%
+    (9, "Advanced Micro Devices Inc", "AMD:NASDAQ", 160.0, 164.0),  # +2.5%
+    (10, "Intel Corp", "INTC:NASDAQ", 30.0, 27.0),                  # -10%
+    (11, "International Business Machines Corp", "IBM:NYSE", 200.0, 207.0),  # +3.5%
+    (12, "Oracle Corp", "ORCL:NYSE", 140.0, 133.0),                 # -5%
+    (13, "Salesforce Inc", "CRM:NYSE", 300.0, 324.0),               # +8%
+    (14, "Adobe Inc", "ADBE:NASDAQ", 500.0, 470.0),                 # -6%
+    (15, "PayPal Holdings Inc", "PYPL:NASDAQ", 80.0, 79.0),         # -1.25%
+    (16, "Uber Technologies Inc", "UBER:NYSE", 70.0, 84.0),         # +20%
+    (17, "Walt Disney Co", "DIS:NYSE", 100.0, 97.0),                # -3%
+    (18, "Coca-Cola Co", "KO:NYSE", 200.0, 202.0),                  # +1%
+    (19, "JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0),          # -8%
+    (20, "Walmart Inc", "WMT:NYSE", 100.0, 104.0),                  # +4%
+]
+STOCK_NAMES = {stock_id: (name, acronym) for (stock_id, name, acronym, _, _) in STOCKS}
 
-# Newest pull first, as the distributor's query returns it: today's pull (4-6) then yesterday's (1-3)
-MARIADB_DATA = [(3, 50.0), (2, 150.0), (1, 110.0), (3, 50.0), (2, 200.0), (1, 100.0)]
+# Biggest gainer first, biggest loser last
+EXPECTED_ORDER = ["UBER:NYSE", "NVDA:NASDAQ", "GOOGL:NASDAQ", "CRM:NYSE", "AMZN:NASDAQ", "WMT:NYSE", "IBM:NYSE",
+                  "AMD:NASDAQ", "NFLX:NASDAQ", "KO:NYSE", "MSFT:NASDAQ", "PYPL:NASDAQ", "META:NASDAQ", "DIS:NYSE",
+                  "ORCL:NYSE", "ADBE:NASDAQ", "JPM:NYSE", "INTC:NASDAQ", "TSLA:NASDAQ", "AAPL:NASDAQ"]
+
+# Newest pull first, as the distributor's query returns it: today's pull then yesterday's
+MARIADB_DATA = ([(stock_id, today) for (stock_id, _, _, _, today) in reversed(STOCKS)] +
+                [(stock_id, yesterday) for (stock_id, _, _, yesterday, _) in reversed(STOCKS)])
 
 
 class FakeCursor:
@@ -72,85 +97,86 @@ class FakeGenAI:
         return Model()
 
 
-def finding(stock_id, yesterday_price, today_price):
-    name, acronym = STOCK_NAMES[stock_id]
-    return {"stock_id": stock_id, "stock_name": name, "acronym": acronym, "yesterday_price": yesterday_price,
-            "today_price": today_price, "difference": today_price - yesterday_price,
+def finding(stock_id, with_names=True):
+    '''
+    The finding format_findings should produce for a stock in STOCKS (with names, as run_analyze adds them).
+    '''
+    (_, name, acronym, yesterday_price, today_price) = STOCKS[stock_id - 1]
+    return {"stock_id": stock_id, "stock_name": name if with_names else None, "acronym": acronym if with_names else None,
+            "yesterday_price": yesterday_price, "today_price": today_price, "difference": today_price - yesterday_price,
             "rate_of_change": (today_price - yesterday_price) / yesterday_price}
 
 
+def xlsx_row(acronym):
+    f = next(finding(stock_id) for (stock_id, _, stock_acronym, _, _) in STOCKS if stock_acronym == acronym)
+    return (f["stock_name"], f["acronym"], f["yesterday_price"], f["today_price"], f["difference"], f["rate_of_change"])
+
+
 def test_run_analyze(monkeypatch, tmp_path):
-    fake_genai = FakeGenAI("Alphabet rose and Apple fell.")
+    fake_genai = FakeGenAI("Uber rose and Apple fell.")
     monkeypatch.setattr(analyzer, "genai", fake_genai)
     xlsx_location = str(tmp_path / "report.xlsx")
     config = {"email_config": {"attachment": xlsx_location}}
 
     blurb = analyzer.run_analyze(MARIADB_DATA, FakeCursor(), config)
 
-    assert blurb == "Alphabet rose and Apple fell."
+    assert blurb == "Uber rose and Apple fell."
     assert len(fake_genai.questions) == 1
     rows = list(openpyxl.load_workbook(xlsx_location)["Stock Data"].iter_rows(values_only=True))
-    assert rows == [
-        tuple(analyzer.XLSX_HEADER),
-        ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1),
-        ("Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0, 0.0, 0.0),
-        ("Apple Inc", "AAPL:NASDAQ", 200.0, 150.0, -50.0, -0.25),
-    ]
+    assert rows == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in EXPECTED_ORDER]
 
 
 def test_format_findings():
-    # Stock 4 has only one price and stock 5 had a price of 0, so neither can have a rate of change.
-    # Stocks 6 and 7 have a missing (-1) old or new price, and stock 8 uses -1 as an int, so all are left out.
-    findings = analyzer.format_findings(MARIADB_DATA + [(4, 10.0), (5, 3.0), (5, 0.0), (6, -1.0), (6, 20.0),
-                                                        (7, 30.0), (7, -1.0), (8, -1), (8, 40.0)])
+    # Stock 21 has only one price and stock 22 had a price of 0, so neither can have a rate of change.
+    # Stocks 23 and 24 have a missing (-1) old or new price, and stock 25 uses -1 as an int, so all are left out.
+    findings = analyzer.format_findings(MARIADB_DATA + [(21, 10.0), (22, 3.0), (22, 0.0), (23, -1.0), (23, 20.0),
+                                                        (24, 30.0), (24, -1.0), (25, -1), (25, 40.0)])
 
-    assert findings == [
-        {"stock_id": 3, "stock_name": None, "acronym": None, "yesterday_price": 50.0, "today_price": 50.0,
-         "difference": 0.0, "rate_of_change": 0.0},
-        {"stock_id": 2, "stock_name": None, "acronym": None, "yesterday_price": 200.0, "today_price": 150.0,
-         "difference": -50.0, "rate_of_change": -0.25},
-        {"stock_id": 1, "stock_name": None, "acronym": None, "yesterday_price": 100.0, "today_price": 110.0,
-         "difference": 10.0, "rate_of_change": 0.1},
-    ]
+    assert len(findings) == len(STOCKS)
+    assert {f["stock_id"]: f for f in findings} == {stock_id: finding(stock_id, with_names=False)
+                                                    for (stock_id, _, _, _, _) in STOCKS}
 
 
 def test_sort_findings():
-    findings = [finding(3, 50.0, 50.0), finding(2, 200.0, 150.0), finding(1, 100.0, 110.0)]
+    findings = [finding(stock_id) for (stock_id, _, _, _, _) in STOCKS]
 
     sorted_findings = analyzer.sort_findings(findings)
 
-    assert [f["stock_id"] for f in sorted_findings] == [1, 3, 2]
+    assert [f["acronym"] for f in sorted_findings] == EXPECTED_ORDER
 
 
 def test_get_insight(monkeypatch):
     fake_genai = FakeGenAI("Here is today's insight.")
     monkeypatch.setattr(analyzer, "genai", fake_genai)
-    sorted_data = [finding(1, 100.0, 110.0), finding(3, 50.0, 50.0), finding(2, 200.0, 150.0)]
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
 
     blurb = analyzer.get_insight(sorted_data)
 
     assert blurb == "Here is today's insight."
     question = fake_genai.questions[0]
     gainers, losers = question.split("Top losers:")
+    assert "Uber Technologies Inc (UBER:NYSE): 70.0 -> 84.0 (+20.00%)" in gainers
+    assert "NVIDIA Corp (NVDA:NASDAQ): 120.0 -> 138.0 (+15.00%)" in gainers
     assert "Alphabet Inc Class A (GOOGL:NASDAQ): 100.0 -> 110.0 (+10.00%)" in gainers
     assert "Apple Inc (AAPL:NASDAQ): 200.0 -> 150.0 (-25.00%)" in losers
-    # an unchanged stock is neither a gainer nor a loser
+    assert "Tesla Inc (TSLA:NASDAQ): 250.0 -> 200.0 (-20.00%)" in losers
+    assert "Intel Corp (INTC:NASDAQ): 30.0 -> 27.0 (-10.00%)" in losers
+    # only the top three of each are asked about
+    assert "Salesforce" not in question
+    assert "JPMorgan" not in question
     assert "Microsoft" not in question
 
 
 def test_develop_xlsx(tmp_path):
     xlsx_location = str(tmp_path / "report.xlsx")
-    sorted_data = [finding(1, 100.0, 110.0), finding(2, 200.0, 150.0)]
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
 
     analyzer.develop_xlsx(sorted_data, "First line.\nSecond line.", xlsx_location)
 
     workbook = openpyxl.load_workbook(xlsx_location)
     assert workbook.sheetnames == ["Stock Data", "Insight"]
     data_sheet = workbook["Stock Data"]
-    assert list(data_sheet.iter_rows(values_only=True)) == [
-        tuple(analyzer.XLSX_HEADER),
-        ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1),
-        ("Apple Inc", "AAPL:NASDAQ", 200.0, 150.0, -50.0, -0.25),
-    ]
-    assert data_sheet["F2"].number_format == "0.00%"
+    assert list(data_sheet.iter_rows(values_only=True)) == \
+        [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in EXPECTED_ORDER]
+    assert all(data_sheet.cell(row=row, column=6).number_format == "0.00%" for row in range(2, len(STOCKS) + 2))
     assert list(workbook["Insight"].iter_rows(values_only=True)) == [("First line.",), ("Second line.",)]
