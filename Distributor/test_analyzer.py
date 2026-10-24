@@ -6,6 +6,7 @@
 #
 # Run from the Distributor directory:
 #   python3 -m pytest test_analyzer.py
+import datetime
 import os
 import sys
 import types
@@ -54,19 +55,19 @@ STOCKS = [
 CANNED_INSIGHT = """Today's biggest movers (canned test insight - these articles are made up)
 
 Top gainers
-- Uber Technologies Inc (UBER:NYSE) +20.00%: Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
+- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
   Article: "Uber Takes Robotaxis Nationwide" - https://news.example.com/2026/10/uber-robotaxi-expansion
-- NVIDIA Corp (NVDA:NASDAQ) +15.00%: A new data center chip order from several cloud providers lifted the stock.
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] A new data center chip order from several cloud providers lifted the stock.
   Article: "Cloud Giants Line Up for NVIDIA's Next Chip" - https://news.example.com/2026/10/nvidia-data-center-orders
-- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: Strong cloud and ad revenue in its quarterly report beat expectations.
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Strong cloud and ad revenue in its quarterly report beat expectations.
   Article: "Alphabet Earnings Beat on Cloud Growth" - https://news.example.com/2026/10/alphabet-earnings-beat
 
 Top losers
-- Apple Inc (AAPL:NASDAQ) -25.00%: Reports of weaker phone demand and a delayed product launch weighed on the stock.
+- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Reports of weaker phone demand and a delayed product launch weighed on the stock.
   Article: "Apple Delays Launch Amid Soft Demand" - https://news.example.com/2026/10/apple-launch-delay
-- Tesla Inc (TSLA:NASDAQ) -20.00%: Quarterly deliveries came in well below analyst forecasts.
+- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Quarterly deliveries came in well below analyst forecasts.
   Article: "Tesla Deliveries Miss Estimates" - https://news.example.com/2026/10/tesla-deliveries-miss
-- Intel Corp (INTC:NASDAQ) -10.00%: Intel cut its full-year outlook, citing slower PC sales.
+- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel cut its full-year outlook, citing slower PC sales.
   Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
 """
 
@@ -82,10 +83,29 @@ XLSX_ORDER = ["ADBE:NASDAQ", "AMD:NASDAQ", "GOOGL:NASDAQ", "AMZN:NASDAQ", "AAPL:
               "MSFT:NASDAQ", "NFLX:NASDAQ", "NVDA:NASDAQ", "PYPL:NASDAQ", "TSLA:NASDAQ",
               "KO:NYSE", "IBM:NYSE", "JPM:NYSE", "ORCL:NYSE", "CRM:NYSE", "UBER:NYSE", "WMT:NYSE", "DIS:NYSE"]
 
-# How the Insight sheet should show CANNED_INSIGHT: the headlines get an emoji (and are bold)
 COW_FACE, BEAR_FACE = "\U0001F42E", "\U0001F43B"
-EXPECTED_INSIGHT = [{"Top gainers": COW_FACE + " Top gainers", "Top losers": BEAR_FACE + " Top losers"}.get(line, line)
-                    for line in CANNED_INSIGHT.splitlines() if line]
+
+# The Dashboard's gainers/losers table for CANNED_INSIGHT: (side, ticker, move, driver, what happened, source, link)
+EXPECTED_DASHBOARD = [
+    (COW_FACE + " Gainer", "UBER", 0.2, "Product / orders",
+     "Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.",
+     "Uber Takes Robotaxis Nationwide", "https://news.example.com/2026/10/uber-robotaxi-expansion"),
+    (COW_FACE + " Gainer", "NVDA", 0.15, "Product / orders",
+     "A new data center chip order from several cloud providers lifted the stock.",
+     "Cloud Giants Line Up for NVIDIA's Next Chip", "https://news.example.com/2026/10/nvidia-data-center-orders"),
+    (COW_FACE + " Gainer", "GOOGL", 0.1, "Earnings / results",
+     "Strong cloud and ad revenue in its quarterly report beat expectations.",
+     "Alphabet Earnings Beat on Cloud Growth", "https://news.example.com/2026/10/alphabet-earnings-beat"),
+    (BEAR_FACE + " Loser", "AAPL", -0.25, "Product / orders",
+     "Reports of weaker phone demand and a delayed product launch weighed on the stock.",
+     "Apple Delays Launch Amid Soft Demand", "https://news.example.com/2026/10/apple-launch-delay"),
+    (BEAR_FACE + " Loser", "TSLA", -0.2, "Earnings / results",
+     "Quarterly deliveries came in well below analyst forecasts.",
+     "Tesla Deliveries Miss Estimates", "https://news.example.com/2026/10/tesla-deliveries-miss"),
+    (BEAR_FACE + " Loser", "INTC", -0.1, "Guidance / outlook",
+     "Intel cut its full-year outlook, citing slower PC sales.",
+     "Intel Lowers Guidance on PC Slump", "https://news.example.com/2026/10/intel-guidance-cut"),
+]
 
 # Newest pull first, as the distributor's query returns it: today's pull then yesterday's
 MARIADB_DATA = ([(stock_id, today) for (stock_id, _, _, _, today) in reversed(STOCKS)] +
@@ -153,10 +173,11 @@ def test_run_analyze(monkeypatch, tmp_path):
 
     assert blurb == CANNED_INSIGHT
     assert len(fake_genai.questions) == 1
-    rows = list(openpyxl.load_workbook(xlsx_location)["Stock Data"].iter_rows(values_only=True))
+    workbook = openpyxl.load_workbook(xlsx_location)
+    rows = list(workbook["Stock Data"].iter_rows(values_only=True))[:len(STOCKS) + 1]
     assert rows == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in XLSX_ORDER]
-    insight = [row[0] for row in openpyxl.load_workbook(xlsx_location)["Insight"].iter_rows(values_only=True) if row[0]]
-    assert insight == EXPECTED_INSIGHT
+    assert [row[:6] for row in workbook["Dashboard"].iter_rows(min_row=8, max_row=13, values_only=True)] == \
+        [expected[:6] for expected in EXPECTED_DASHBOARD]
 
 
 def test_format_findings():
@@ -178,6 +199,17 @@ def test_sort_findings():
     assert [f["acronym"] for f in sorted_findings] == EXPECTED_ORDER
 
 
+def test_top_movers():
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+
+    gainers, losers = analyzer.top_movers(sorted_data)
+
+    assert [f["acronym"] for f in gainers] == ["UBER:NYSE", "NVDA:NASDAQ", "GOOGL:NASDAQ"]
+    assert [f["acronym"] for f in losers] == ["AAPL:NASDAQ", "TSLA:NASDAQ", "INTC:NASDAQ"]
+    # an unchanged stock is neither, even when fewer than three stocks moved that way
+    assert analyzer.top_movers([finding(1), finding(3)]) == ([finding(1)], [])
+
+
 def test_get_insight(monkeypatch):
     fake_genai = FakeGenAI(CANNED_INSIGHT)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
@@ -188,7 +220,8 @@ def test_get_insight(monkeypatch):
     assert blurb == CANNED_INSIGHT
     question = fake_genai.questions[0]
     assert 'a line saying only "Top gainers"' in question and 'a line saying only "Top losers"' in question
-    gainers, losers = question.split("Top losers:")
+    assert "[Driver]" in question and "Earnings / results" in question
+    gainers, losers = question.split("\nTop losers:")
     assert "Uber Technologies Inc (UBER:NYSE): 70.0 -> 84.0 (+20.00%)" in gainers
     assert "NVIDIA Corp (NVDA:NASDAQ): 120.0 -> 138.0 (+15.00%)" in gainers
     assert "Alphabet Inc Class A (GOOGL:NASDAQ): 100.0 -> 110.0 (+10.00%)" in gainers
@@ -199,6 +232,30 @@ def test_get_insight(monkeypatch):
     assert "Salesforce" not in question
     assert "JPMorgan" not in question
     assert "Microsoft" not in question
+
+
+def test_parse_insight():
+    details = analyzer.parse_insight(CANNED_INSIGHT)
+
+    assert list(details) == ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]
+    for (_, ticker, _, driver, what_happened, article, url) in EXPECTED_DASHBOARD:
+        assert details[ticker] == {"driver": driver, "what_happened": what_happened, "article": article, "url": url}
+
+    # markdown is ignored, and a stock without a driver or article still gets what happened
+    assert analyzer.parse_insight("* **Tesla Inc (TSLA:NASDAQ) -20.00%:** Deliveries missed.") == \
+        {"TSLA": {"driver": None, "what_happened": "Deliveries missed.", "article": None, "url": None}}
+    assert analyzer.parse_insight(analyzer.AI_ERROR_ANSWER) == {}
+
+
+def test_describe_move():
+    assert analyzer.describe_move(0.2) == "▲ 20.00%"
+    assert analyzer.describe_move(-0.004625) == "▼ 0.46%"
+    assert analyzer.describe_move(0.0) == "0.00%"
+
+
+def test_ticker_and_market():
+    assert analyzer.ticker_and_market(finding(1)) == ("GOOGL", "NASDAQ")
+    assert analyzer.ticker_and_market(finding(1, with_names=False)) == ("", "")
 
 
 def test_shade_for_rate():
@@ -222,33 +279,51 @@ def test_develop_xlsx(tmp_path):
     analyzer.develop_xlsx(sorted_data, CANNED_INSIGHT, xlsx_location)
 
     workbook = openpyxl.load_workbook(xlsx_location)
-    assert workbook.sheetnames == ["Stock Data", "Insight"]
-    data_sheet = workbook["Stock Data"]
-    assert list(data_sheet.iter_rows(values_only=True)) == \
-        [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in XLSX_ORDER]
+    assert workbook.sheetnames == ["Dashboard", "Stock Data"]
 
-    # each percent difference is shaded green (gain) or red (loss), darker the further from 0;
-    # Apple's -25% is the biggest move, so it is the darkest
+    # ---- Dashboard: title, date, summary of the day, biggest gain and drop
+    dashboard = workbook["Dashboard"]
+    assert dashboard["A1"].value == "End-of-day watchlist report" and dashboard["A1"].font.bold
+    assert dashboard["A2"].value == "Report for {}".format(datetime.date.today().isoformat())
+    assert dashboard["A3"].value == "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%"
+    assert dashboard["A4"].value == "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%"
+
+    # ---- Dashboard: the gainers/losers table, with links to the articles
+    assert [cell.value for cell in dashboard[7]] == ["Side", "Ticker", "Move", "Driver", "What happened", "Source"]
+    assert all(cell.font.bold for cell in dashboard[7])
+    for row, expected in enumerate(EXPECTED_DASHBOARD, start=8):
+        cells = dashboard[row]
+        assert tuple(cell.value for cell in cells) == expected[:6]
+        assert cells[2].number_format == analyzer.PERCENT_FORMAT
+        assert cells[5].hyperlink.target == expected[6]
+
+    # ---- Stock Data: every stock alphabetically by market then name, with formatted numbers
+    data_sheet = workbook["Stock Data"]
+    rows = list(data_sheet.iter_rows(values_only=True))
+    assert rows[:len(STOCKS) + 1] == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in XLSX_ORDER]
+    assert data_sheet.cell(row=len(STOCKS) + 3, column=1).value == "Hover any header for a definition."
+    assert data_sheet.freeze_panes == "B2"
+    assert data_sheet.auto_filter.ref == "A1:G21"
+    assert all(cell.comment is not None and cell.font.bold for cell in data_sheet[1])
+    assert data_sheet["D2"].number_format == analyzer.PRICE_FORMAT
+    assert data_sheet["F2"].number_format == analyzer.DIFFERENCE_FORMAT
+
+    # each percent difference is marked ▲/▼ and shaded green (gain) or red (loss), darker the further from 0;
+    # Apple's -25% is the biggest move, so it is the darkest; no change is a black 0 with no shading
     for row in range(2, len(STOCKS) + 2):
         cell = data_sheet.cell(row=row, column=7)
+        assert cell.number_format == analyzer.PERCENT_FORMAT
         shade = analyzer.shade_for_rate(cell.value, 0.25)
         if cell.value == 0:
-            assert shade is None and cell.fill.fill_type is None
-            assert cell.number_format == "0" and cell.font.color.rgb[-6:] == "000000"
+            assert shade is None and cell.fill.fill_type is None and cell.font.color.rgb[-6:] == "000000"
         else:
             assert cell.fill.fill_type == "solid" and cell.fill.start_color.rgb[-6:] == shade[0]
-            assert cell.font.color.rgb[-6:] == shade[1] and cell.number_format == "0.00%"
+            assert cell.font.color.rgb[-6:] == shade[1]
     apple_row = XLSX_ORDER.index("AAPL:NASDAQ") + 2
     assert data_sheet.cell(row=apple_row, column=7).fill.start_color.rgb[-6:] == "B3261E"
 
-    # the headlines get a cow face / bear face emoji and are bold; other lines are not bold
-    insight_sheet = workbook["Insight"]
-    assert [row[0] for row in insight_sheet.iter_rows(values_only=True) if row[0]] == EXPECTED_INSIGHT
-    for cell in [c for (c,) in insight_sheet.iter_rows() if c.value]:
-        assert bool(cell.font.bold) == (cell.value in (COW_FACE + " Top gainers", BEAR_FACE + " Top losers"))
-
-    # headlines are still found if the AI dresses them up
-    analyzer.develop_xlsx(sorted_data, "**Top Gainers**\nUp.\n## Top losers:\nDown.", xlsx_location)
-    insight_sheet = openpyxl.load_workbook(xlsx_location)["Insight"]
-    assert [row[0] for row in insight_sheet.iter_rows(values_only=True)] == \
-        [COW_FACE + " Top gainers", "Up.", BEAR_FACE + " Top losers", "Down."]
+    # if the AI failed, the table still lists the movers, without details
+    analyzer.develop_xlsx(sorted_data, analyzer.AI_ERROR_ANSWER, xlsx_location)
+    dashboard = openpyxl.load_workbook(xlsx_location)["Dashboard"]
+    assert [cell.value for cell in dashboard[8]] == [COW_FACE + " Gainer", "UBER", 0.2, "—",
+                                                     "No article found for this stock.", "—"]

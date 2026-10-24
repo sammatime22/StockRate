@@ -46,19 +46,19 @@ CANNED_AI_ANSWER = "Canned AI answer (set STOCKRATE_GEMINI_KEY to ask Gemini for
 CANNED_INSIGHT = """Today's biggest movers (canned test insight - these articles are made up)
 
 Top gainers
-- Uber Technologies Inc (UBER:NYSE) +20.00%: Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
+- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
   Article: "Uber Takes Robotaxis Nationwide" - https://news.example.com/2026/10/uber-robotaxi-expansion
-- NVIDIA Corp (NVDA:NASDAQ) +15.00%: A new data center chip order from several cloud providers lifted the stock.
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] A new data center chip order from several cloud providers lifted the stock.
   Article: "Cloud Giants Line Up for NVIDIA's Next Chip" - https://news.example.com/2026/10/nvidia-data-center-orders
-- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: Strong cloud and ad revenue in its quarterly report beat expectations.
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Strong cloud and ad revenue in its quarterly report beat expectations.
   Article: "Alphabet Earnings Beat on Cloud Growth" - https://news.example.com/2026/10/alphabet-earnings-beat
 
 Top losers
-- Apple Inc (AAPL:NASDAQ) -25.00%: Reports of weaker phone demand and a delayed product launch weighed on the stock.
+- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Reports of weaker phone demand and a delayed product launch weighed on the stock.
   Article: "Apple Delays Launch Amid Soft Demand" - https://news.example.com/2026/10/apple-launch-delay
-- Tesla Inc (TSLA:NASDAQ) -20.00%: Quarterly deliveries came in well below analyst forecasts.
+- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Quarterly deliveries came in well below analyst forecasts.
   Article: "Tesla Deliveries Miss Estimates" - https://news.example.com/2026/10/tesla-deliveries-miss
-- Intel Corp (INTC:NASDAQ) -10.00%: Intel cut its full-year outlook, citing slower PC sales.
+- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel cut its full-year outlook, citing slower PC sales.
   Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
 """
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
@@ -365,14 +365,14 @@ def test_distribution_sends_report(harness):
         ("Walt Disney Co", "DIS", "NYSE", 100.0, 97.0, -3.0, -0.03),
     ]
     workbook = openpyxl.load_workbook(harness.config["email_config"]["attachment"])
-    assert workbook.sheetnames == ["Stock Data", "Insight"]
-    assert list(workbook["Stock Data"].iter_rows(values_only=True)) == expected_rows
+    assert workbook.sheetnames == ["Dashboard", "Stock Data"]
+    assert list(workbook["Stock Data"].iter_rows(values_only=True))[:len(expected_rows)] == expected_rows
     # gains are shaded green and losses red; no change is a plain black 0
     data_sheet = workbook["Stock Data"]
     uber, microsoft, apple = data_sheet["G19"], data_sheet["G9"], data_sheet["G6"]
     assert uber.fill.fill_type == "solid" and uber.fill.start_color.rgb[-6:] == "469358"
     assert apple.fill.fill_type == "solid" and apple.fill.start_color.rgb[-6:] == "B3261E"
-    assert microsoft.fill.fill_type is None and microsoft.number_format == "0"
+    assert microsoft.fill.fill_type is None and microsoft.font.color.rgb[-6:] == "000000"
 
     assert len(harness.genai.questions) == 1
     question = harness.genai.questions[0]
@@ -390,13 +390,20 @@ def test_distribution_sends_report(harness):
     if not GEMINI_KEY:
         assert email["contents"] == CANNED_INSIGHT
     sheets = list(email["attachments"].values())[0]
-    assert sheets["Stock Data"] == expected_rows
-    # the Insight sheet holds the blurb one line per row (blank lines come back as empty cells),
-    # with a cow face on the gainers headline and a bear face on the losers headline
-    insight = [row[0] for row in sheets["Insight"] if row[0]]
+    assert sheets["Stock Data"][:len(expected_rows)] == expected_rows
+    # the Dashboard summarises the day and lists the top gainers and losers (rows 8-13)
+    dashboard = sheets["Dashboard"]
+    assert dashboard[2][0] == "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%"
+    assert dashboard[3][0] == "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%"
+    table = dashboard[7:13]
+    assert [row[:3] for row in table] == [
+        ("\U0001F42E Gainer", "UBER", 0.2), ("\U0001F42E Gainer", "NVDA", 0.15), ("\U0001F42E Gainer", "GOOGL", 0.1),
+        ("\U0001F43B Loser", "AAPL", -0.25), ("\U0001F43B Loser", "TSLA", -0.2), ("\U0001F43B Loser", "INTC", -0.1)]
     if not GEMINI_KEY:
-        assert insight == [{"Top gainers": "\U0001F42E Top gainers", "Top losers": "\U0001F43B Top losers"}.get(line, line)
-                           for line in CANNED_INSIGHT.splitlines() if line]
+        assert [row[3] for row in table] == ["Product / orders", "Product / orders", "Earnings / results",
+                                             "Product / orders", "Earnings / results", "Guidance / outlook"]
+        assert table[0][4] == "Shares jumped after Uber announced its robotaxi service is expanding to ten more cities."
+        assert table[0][5] == "Uber Takes Robotaxis Nationwide"
     assert_finished(harness)
 
 
@@ -424,6 +431,7 @@ def test_distribution_still_emails_when_ai_fails(harness):
     assert email["subject"].startswith("Todays Stock Data ")
     assert email["contents"] == AI_ERROR_ANSWER
     sheets = list(email["attachments"].values())[0]
-    assert sheets["Stock Data"] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
-    assert sheets["Insight"] == [(AI_ERROR_ANSWER,)]
+    assert sheets["Stock Data"][:2] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
+    # without the AI's answer the Dashboard still lists the gainer, just without details
+    assert sheets["Dashboard"][7] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—", "No article found for this stock.", "—")
     assert_finished(harness)

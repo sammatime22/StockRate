@@ -1,9 +1,13 @@
 # A program used to analyze data prior to distribution.
 # sammatime, 2026
+import datetime
 import google.generativeai as genai
 import logging
 import openpyxl
-from openpyxl.styles import Font, PatternFill
+from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.properties import PageSetupProperties
+import re
 import traceback
 
 # Config keys
@@ -20,24 +24,63 @@ MISSING_PRICE = -1
 GEMINI_MODEL = "gemini-2.0-flash"
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 TOP_COUNT = 3
+GAINERS_HEADLINE = "Top gainers"
+LOSERS_HEADLINE = "Top losers"
+DRIVERS = ["Earnings / results", "Product / orders", "Guidance / outlook", "Analyst rating", "Macro / sector",
+           "Legal / regulatory", "Other"]
+
+# How each stock appears in the AI's answer, so the Dashboard can pick it apart:
+#   - Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] What happened.
+#     Article: "Article title" - https://...
+STOCK_LINE = re.compile(r"^\s*[-•*]\s*.*?\(([A-Za-z0-9.\-]+)(?::[A-Za-z]+)?\)[^:]*:\s*(?:\[([^\]]+)\]\s*)?(.+?)\s*$")
+ARTICLE_LINE = re.compile(r"^\s*Article:\s*\"?(.+?)\"?\s+[-–—]\s+(https?://\S+)\s*$")
 
 # xlsx layout
+DASHBOARD_SHEET_TITLE = "Dashboard"
 DATA_SHEET_TITLE = "Stock Data"
-INSIGHT_SHEET_TITLE = "Insight"
+REPORT_TITLE = "End-of-day watchlist report"
 XLSX_HEADER = ["Stock Name", "Ticker", "Market", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference"]
 DATA_COLUMN_WIDTHS = [38, 10, 10, 18, 16, 18, 20]
-INSIGHT_COLUMN_WIDTH = 120
+DASHBOARD_HEADER = ["Side", "Ticker", "Move", "Driver", "What happened", "Source"]
+DASHBOARD_COLUMN_WIDTHS = [12, 9, 12, 22, 82, 44]
+DASHBOARD_HEADER_ROW = 7
+HEADER_NOTES = {
+    "Stock Name": "Company name.",
+    "Ticker": "The symbol the stock trades under, e.g. AAPL.",
+    "Market": "The exchange the stock is listed on (NYSE or Nasdaq). It says little about what moves the stock.",
+    "Yesterday's Price": "Usually called the previous close. Use a split-adjusted value, or a stock split will look like a crash.",
+    "Today's Price": "Today's closing price (the close), set at the 4:00pm ET bell.",
+    "Total Difference": "Change in dollars: close minus previous close.",
+    "Percent Difference": "Change ÷ previous close, usually called % change. The ▲/▼ come from the number format, "
+                          "so direction reads without relying on red vs. green.",
+}
+DATA_FOOTNOTE = "Hover any header for a definition."
+NO_ARTICLE = "No article found for this stock."
+PLACEHOLDER = "—"
+
+# Number formats: dollars, signed dollars, and a ▲/▼ percent (no change shows a plain 0)
+PRICE_FORMAT = "\\$#,##0.00"
+DIFFERENCE_FORMAT = "\\+\\$#,##0.00;\\-\\$#,##0.00;\\$0.00"
+PERCENT_FORMAT = "\"▲ \"0.00%;\"▼ \"0.00%;0"
+
+# Fonts, borders and alignment
+TITLE_FONT = Font(name="Calibri", bold=True, size=16)
+NOTE_FONT = Font(name="Calibri", italic=True, size=10, color="52514E")
+SUMMARY_FONT = Font(name="Calibri", bold=True, size=14)
+BOLD_FONT = Font(name="Calibri", bold=True, size=11)
+MUTED_FONT = Font(name="Calibri", italic=True, size=11, color="52514E")
+HEADER_BORDER = Border(bottom=Side(style="thin", color="C3C2B7"))
+TOP = Alignment(vertical="top")
+TOP_WRAP = Alignment(vertical="top", wrap_text=True)
 
 # Percent difference shading: a move near 0 gets the light color, the biggest move of the day gets the dark one
 GAIN_LIGHT, GAIN_DARK = (0xE6, 0xF4, 0xEA), (0x1E, 0x7B, 0x34)
 LOSS_LIGHT, LOSS_DARK = (0xFC, 0xE8, 0xE6), (0xB3, 0x26, 0x1E)
 BLACK, WHITE = "000000", "FFFFFF"
 
-# Insight headlines: the AI is asked to head its sections with these, and the xlsx shows them bold with an emoji
-# (there is no bull face emoji, so the gainers get a cow face)
-GAINERS_HEADLINE = "Top gainers"
-LOSERS_HEADLINE = "Top losers"
-HEADLINE_EMOJIS = {GAINERS_HEADLINE: "\U0001F42E", LOSERS_HEADLINE: "\U0001F43B"}  # cow face, bear face
+# Emojis (there is no bull face emoji, so the gainers get a cow face)
+COW_FACE, BEAR_FACE = "\U0001F42E", "\U0001F43B"
+SUN, CLOUD, RAIN = "☀️", "⛅", "\U0001F327️"
 
 logger = logging.getLogger()
 
@@ -145,6 +188,24 @@ def sort_findings(formatted_mariadb_data):
     return sorted(formatted_mariadb_data, key=lambda finding: finding["rate_of_change"], reverse=True)
 
 
+def top_movers(sorted_data):
+    '''
+    Picks out the top gainers and losers.
+
+    Parameters:
+    -----------
+      sorted_data: a sorted set of stock data
+
+    Returns:
+    -----------
+      - (gainers, losers): up to three stocks that rose, biggest gain first, and up to three that fell,
+        biggest drop first. Unchanged stocks are in neither.
+    '''
+    gainers = [finding for finding in sorted_data if finding["rate_of_change"] > 0][:TOP_COUNT]
+    losers = [finding for finding in reversed(sorted_data) if finding["rate_of_change"] < 0][:TOP_COUNT]
+    return gainers, losers
+
+
 def get_insight(sorted_data):
     '''
     Talks to an AI model about the current sorted data, specifically asking for insight on the top three gainers
@@ -158,8 +219,7 @@ def get_insight(sorted_data):
     -----------
       - a blurb for both the email and the xlsx file
     '''
-    gainers = [finding for finding in sorted_data if finding["rate_of_change"] > 0][:TOP_COUNT]
-    losers = [finding for finding in reversed(sorted_data) if finding["rate_of_change"] < 0][:TOP_COUNT]
+    gainers, losers = top_movers(sorted_data)
 
     def describe(findings):
         return "\n".join("{} ({}): {} -> {} ({:+.2%})".format(finding["stock_name"], finding["acronym"],
@@ -169,8 +229,13 @@ def get_insight(sorted_data):
     query = ("Here are today's top three gainers and top three losers among the stocks we track.\n"
         "For each stock, please find a recent news article about it and write a short blurb on why it may have moved, "
         "naming the article you used. Keep the whole answer short enough for an email.\n"
-        "Start the gainers section with a line saying only \"{}\" and the losers section with a line saying only \"{}\".\n\n"
-        "Top gainers:\n{}\n\nTop losers:\n{}\n").format(GAINERS_HEADLINE, LOSERS_HEADLINE, describe(gainers), describe(losers))
+        "Start the gainers section with a line saying only \"{}\" and the losers section with a line saying only \"{}\".\n"
+        "Write each stock as exactly these two lines, in plain text:\n"
+        "- Stock Name (TICKER:MARKET) +1.23%: [Driver] One or two sentences on what happened.\n"
+        "  Article: \"Article title\" - https://link.to/the/article\n"
+        "where Driver is one of: {}.\n\n"
+        "Top gainers:\n{}\n\nTop losers:\n{}\n").format(GAINERS_HEADLINE, LOSERS_HEADLINE, ", ".join(DRIVERS),
+            describe(gainers), describe(losers))
 
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
@@ -179,6 +244,34 @@ def get_insight(sorted_data):
         logger.error("AI query failed: {}".format(e))
         traceback.print_exc()
         return AI_ERROR_ANSWER
+
+
+def parse_insight(blurb):
+    '''
+    Picks each stock's details out of the AI's blurb, for the Dashboard.
+
+    Parameters:
+    -----------
+      blurb: the blurb from get_insight
+
+    Returns:
+    -----------
+      - a dict of ticker (upper case) -> {"driver", "what_happened", "article", "url"}; anything the AI
+        left out is None, and stocks the AI didn't write about are missing
+    '''
+    details = {}
+    current = None
+    for line in blurb.splitlines():
+        line = line.replace("**", "").replace("`", "")
+        stock = STOCK_LINE.match(line)
+        if stock:
+            current = {"driver": stock.group(2), "what_happened": stock.group(3), "article": None, "url": None}
+            details[stock.group(1).upper()] = current
+            continue
+        article = ARTICLE_LINE.match(line)
+        if article and current is not None:
+            current["article"], current["url"] = article.group(1), article.group(2)
+    return details
 
 
 def shade_for_rate(rate_of_change, max_abs_rate):
@@ -203,6 +296,22 @@ def shade_for_rate(rate_of_change, max_abs_rate):
     return fill, WHITE if strength > 0.5 else BLACK
 
 
+def describe_move(rate_of_change):
+    '''
+    A rate of change as text, like the percent number format: "▲ 20.00%", "▼ 25.00%" or "0.00%".
+    '''
+    arrow = "▲ " if rate_of_change > 0 else "▼ " if rate_of_change < 0 else ""
+    return "{}{:.2%}".format(arrow, abs(rate_of_change))
+
+
+def ticker_and_market(finding):
+    '''
+    Splits a stock's acronym: "GOOGL:NASDAQ" -> ("GOOGL", "NASDAQ").
+    '''
+    ticker, _, market = (finding["acronym"] or "").partition(":")
+    return ticker, market
+
+
 def develop_xlsx(sorted_data, blurb, xlsx_location):
     '''
     Uses information gathered earlier in the function calls and develops an xlsx from it.
@@ -215,54 +324,115 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
 
     Creates:
     -----------
-      - a file at the location of email_config -> attachment
-        (a "Stock Data" sheet with one row per stock in alphabetical order by market then name, its acronym
-        split into ticker and market, and its percent difference shaded green or red; and an "Insight" sheet
-        with the blurb, its "Top gainers"/"Top losers" headlines in bold with a cow face/bear face emoji)
+      - a file at the location of email_config -> attachment, with two sheets:
+        "Dashboard": the title and date, a summary of the day, the biggest gain and drop, and a table of the
+          top gainers and losers with the driver, what happened and a linked source from the blurb
+        "Stock Data": one row per stock in alphabetical order by market then name, with its acronym split
+          into ticker and market, prices in dollars, and its percent difference marked ▲/▼ and shaded green
+          or red (darker the bigger the move); the header row is frozen, filterable and has hover notes
     '''
     workbook = openpyxl.Workbook()
+    dashboard = workbook.active
+    dashboard.title = DASHBOARD_SHEET_TITLE
+    data_sheet = workbook.create_sheet(DATA_SHEET_TITLE)
+    for sheet in (dashboard, data_sheet):
+        sheet.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+        sheet.page_setup.fitToHeight = 0
+        sheet.page_setup.orientation = "landscape"
 
-    data_sheet = workbook.active
-    data_sheet.title = DATA_SHEET_TITLE
+    # ---- Dashboard: title, date and summary of the day
+    for column, width in zip("ABCDEF", DASHBOARD_COLUMN_WIDTHS):
+        dashboard.column_dimensions[column].width = width
+    dashboard["A1"] = REPORT_TITLE
+    dashboard["A1"].font = TITLE_FONT
+    dashboard["A2"] = "Report for {}".format(datetime.date.today().isoformat())
+    dashboard["A2"].font = NOTE_FONT
+
+    rates = [finding["rate_of_change"] for finding in sorted_data]
+    up, down = sum(rate > 0 for rate in rates), sum(rate < 0 for rate in rates)
+    average = sum(rates) / len(rates) if rates else 0
+    if up >= 2 * down and up > 0:
+        mood = "{} Up day".format(SUN)
+    elif down >= 2 * up and down > 0:
+        mood = "{} Down day".format(RAIN)
+    else:
+        mood = "{} Mixed day".format(CLOUD)
+    dashboard["A3"] = "{} — {} up · {} down · {} flat · watchlist average {}".format(
+        mood, up, down, len(rates) - up - down, describe_move(average))
+    dashboard["A3"].font = SUMMARY_FONT
+
+    gainers, losers = top_movers(sorted_data)
+    biggest_gain = "{} {}".format(ticker_and_market(gainers[0])[0], describe_move(gainers[0]["rate_of_change"])) \
+        if gainers else PLACEHOLDER
+    biggest_drop = "{} {}".format(ticker_and_market(losers[0])[0], describe_move(losers[0]["rate_of_change"])) \
+        if losers else PLACEHOLDER
+    dashboard["A4"] = "Biggest gain {} · biggest drop {}".format(biggest_gain, biggest_drop)
+
+    # ---- Dashboard: the top gainers and losers, with details from the blurb
+    for column, header in enumerate(DASHBOARD_HEADER, start=1):
+        cell = dashboard.cell(row=DASHBOARD_HEADER_ROW, column=column, value=header)
+        cell.font = BOLD_FONT
+        cell.border = HEADER_BORDER
+
+    details = parse_insight(blurb)
+    movers = [("{} Gainer".format(COW_FACE), finding) for finding in gainers] + \
+             [("{} Loser".format(BEAR_FACE), finding) for finding in losers]
+    for row, (side, finding) in enumerate(movers, start=DASHBOARD_HEADER_ROW + 1):
+        ticker = ticker_and_market(finding)[0]
+        detail = details.get(ticker.upper(), {})
+        side_cell = dashboard.cell(row=row, column=1, value=side)
+        side_cell.font = BOLD_FONT
+        side_cell.alignment = TOP
+        dashboard.cell(row=row, column=2, value=ticker).alignment = TOP
+        move_cell = dashboard.cell(row=row, column=3, value=finding["rate_of_change"])
+        move_cell.number_format = PERCENT_FORMAT
+        move_cell.alignment = TOP
+        dashboard.cell(row=row, column=4, value=detail.get("driver") or PLACEHOLDER).alignment = TOP
+
+        happened_cell = dashboard.cell(row=row, column=5, value=detail.get("what_happened") or NO_ARTICLE)
+        happened_cell.alignment = TOP_WRAP
+        if not detail.get("what_happened"):
+            happened_cell.font = MUTED_FONT
+
+        source_cell = dashboard.cell(row=row, column=6, value=detail.get("article") or PLACEHOLDER)
+        if detail.get("article") and detail.get("url"):
+            source_cell.hyperlink = detail["url"]
+            source_cell.style = "Hyperlink"
+        source_cell.alignment = TOP
+
+    # ---- Stock Data: every stock, alphabetical by market then name
     data_sheet.append(XLSX_HEADER)
     for cell in data_sheet[1]:
-        cell.font = Font(bold=True)
+        cell.font = BOLD_FONT
+        cell.comment = Comment(HEADER_NOTES[cell.value], "StockRate")
     for column, width in zip("ABCDEFG", DATA_COLUMN_WIDTHS):
         data_sheet.column_dimensions[column].width = width
 
-    rows = []
-    for finding in sorted_data:
-        # "GOOGL:NASDAQ" -> ticker "GOOGL", market "NASDAQ"
-        ticker, _, market = (finding["acronym"] or "").partition(":")
-        rows.append((finding["stock_name"] or "", ticker, market, finding))
-    rows.sort(key=lambda row: (row[2].casefold(), row[0].casefold()))
-
-    max_abs_rate = max((abs(finding["rate_of_change"]) for finding in sorted_data), default=0)
-    for (stock_name, ticker, market, finding) in rows:
-        data_sheet.append([stock_name, ticker, market, finding["yesterday_price"],
+    rows = sorted(sorted_data, key=lambda finding: (ticker_and_market(finding)[1].casefold(),
+                                                    (finding["stock_name"] or "").casefold()))
+    max_abs_rate = max((abs(rate) for rate in rates), default=0)
+    for finding in rows:
+        ticker, market = ticker_and_market(finding)
+        data_sheet.append([finding["stock_name"] or "", ticker, market, finding["yesterday_price"],
             finding["today_price"], finding["difference"], finding["rate_of_change"]])
-        percent_cell = data_sheet.cell(row=data_sheet.max_row, column=len(XLSX_HEADER))
+        row = data_sheet.max_row
+        data_sheet.cell(row=row, column=4).number_format = PRICE_FORMAT
+        data_sheet.cell(row=row, column=5).number_format = PRICE_FORMAT
+        data_sheet.cell(row=row, column=6).number_format = DIFFERENCE_FORMAT
+        percent_cell = data_sheet.cell(row=row, column=7)
+        percent_cell.number_format = PERCENT_FORMAT
         shade = shade_for_rate(finding["rate_of_change"], max_abs_rate)
         if shade is None:
             # no change: just a black 0
-            percent_cell.number_format = "0"
-            percent_cell.font = Font(color=BLACK)
+            percent_cell.font = Font(name="Calibri", size=11, color=BLACK)
         else:
             fill, font = shade
-            percent_cell.number_format = "0.00%"
             percent_cell.fill = PatternFill(fill_type="solid", start_color=fill, end_color=fill)
-            percent_cell.font = Font(color=font)
+            percent_cell.font = Font(name="Calibri", size=11, color=font)
 
-    insight_sheet = workbook.create_sheet(INSIGHT_SHEET_TITLE)
-    insight_sheet.column_dimensions["A"].width = INSIGHT_COLUMN_WIDTH
-    headlines = {headline.casefold(): headline for headline in HEADLINE_EMOJIS}
-    for line in blurb.splitlines():
-        # match the headline even if the AI dressed it up, like "**Top Gainers**" or "## Top gainers:"
-        headline = headlines.get(line.strip(" *#_:").casefold())
-        if headline:
-            insight_sheet.append(["{} {}".format(HEADLINE_EMOJIS[headline], headline)])
-            insight_sheet.cell(row=insight_sheet.max_row, column=1).font = Font(bold=True)
-        else:
-            insight_sheet.append([line])
+    last_row = data_sheet.max_row
+    data_sheet.freeze_panes = "B2"
+    data_sheet.auto_filter.ref = "A1:G{}".format(last_row)
+    data_sheet.cell(row=last_row + 2, column=1, value=DATA_FOOTNOTE).font = NOTE_FONT
 
     workbook.save(xlsx_location)
