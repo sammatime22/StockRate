@@ -3,6 +3,7 @@
 import google.generativeai as genai
 import logging
 import openpyxl
+from openpyxl.styles import Font, PatternFill
 import traceback
 
 # Config keys
@@ -24,6 +25,13 @@ TOP_COUNT = 3
 DATA_SHEET_TITLE = "Stock Data"
 INSIGHT_SHEET_TITLE = "Insight"
 XLSX_HEADER = ["Stock Name", "Stock Acronym", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference"]
+DATA_COLUMN_WIDTHS = [38, 16, 18, 16, 18, 20]
+INSIGHT_COLUMN_WIDTH = 120
+
+# Percent difference shading: a move near 0 gets the light color, the biggest move of the day gets the dark one
+GAIN_LIGHT, GAIN_DARK = (0xE6, 0xF4, 0xEA), (0x1E, 0x7B, 0x34)
+LOSS_LIGHT, LOSS_DARK = (0xFC, 0xE8, 0xE6), (0xB3, 0x26, 0x1E)
+BLACK, WHITE = "000000", "FFFFFF"
 
 logger = logging.getLogger()
 
@@ -166,6 +174,28 @@ def get_insight(sorted_data):
         return AI_ERROR_ANSWER
 
 
+def shade_for_rate(rate_of_change, max_abs_rate):
+    '''
+    Works out the shading for a percent difference cell.
+
+    Parameters:
+    -----------
+      rate_of_change: the stock's rate of change
+      max_abs_rate: the biggest rate of change (up or down) among all the stocks, which gets the darkest shade
+
+    Returns:
+    -----------
+      - (fill color, font color) as hex strings: green for a gain and red for a loss, lighter the closer
+        the rate is to 0 (with white text on the darker shades), or None for no change
+    '''
+    if rate_of_change == 0 or max_abs_rate == 0:
+        return None
+    light, dark = (GAIN_LIGHT, GAIN_DARK) if rate_of_change > 0 else (LOSS_LIGHT, LOSS_DARK)
+    strength = min(abs(rate_of_change) / max_abs_rate, 1.0)
+    fill = "".join("{:02X}".format(round(l + (d - l) * strength)) for l, d in zip(light, dark))
+    return fill, WHITE if strength > 0.5 else BLACK
+
+
 def develop_xlsx(sorted_data, blurb, xlsx_location):
     '''
     Uses information gathered earlier in the function calls and develops an xlsx from it.
@@ -179,19 +209,37 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
     Creates:
     -----------
       - a file at the location of email_config -> attachment
-        (a "Stock Data" sheet with one row per stock, and an "Insight" sheet with the blurb)
+        (a "Stock Data" sheet with one row per stock, its percent difference shaded green or red,
+        and an "Insight" sheet with the blurb)
     '''
     workbook = openpyxl.Workbook()
 
     data_sheet = workbook.active
     data_sheet.title = DATA_SHEET_TITLE
     data_sheet.append(XLSX_HEADER)
+    for cell in data_sheet[1]:
+        cell.font = Font(bold=True)
+    for column, width in zip("ABCDEF", DATA_COLUMN_WIDTHS):
+        data_sheet.column_dimensions[column].width = width
+
+    max_abs_rate = max((abs(finding["rate_of_change"]) for finding in sorted_data), default=0)
     for finding in sorted_data:
         data_sheet.append([finding["stock_name"], finding["acronym"], finding["yesterday_price"],
             finding["today_price"], finding["difference"], finding["rate_of_change"]])
-        data_sheet.cell(row=data_sheet.max_row, column=len(XLSX_HEADER)).number_format = "0.00%"
+        percent_cell = data_sheet.cell(row=data_sheet.max_row, column=len(XLSX_HEADER))
+        shade = shade_for_rate(finding["rate_of_change"], max_abs_rate)
+        if shade is None:
+            # no change: just a black 0
+            percent_cell.number_format = "0"
+            percent_cell.font = Font(color=BLACK)
+        else:
+            fill, font = shade
+            percent_cell.number_format = "0.00%"
+            percent_cell.fill = PatternFill(fill_type="solid", start_color=fill, end_color=fill)
+            percent_cell.font = Font(color=font)
 
     insight_sheet = workbook.create_sheet(INSIGHT_SHEET_TITLE)
+    insight_sheet.column_dimensions["A"].width = INSIGHT_COLUMN_WIDTH
     for line in blurb.splitlines():
         insight_sheet.append([line])
 

@@ -42,6 +42,25 @@ GEMINI_MODEL = os.environ.get("STOCKRATE_GEMINI_MODEL")
 OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "test-output")))
 
 CANNED_AI_ANSWER = "Canned AI answer (set STOCKRATE_GEMINI_KEY to ask Gemini for real)."
+# A canned Gemini answer for the 20 test stocks. The articles and links are made up (example.com), not real news.
+CANNED_INSIGHT = """Today's biggest movers (canned test insight - these articles are made up)
+
+Top gainers
+- Uber Technologies Inc (UBER:NYSE) +20.00%: Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
+  Article: "Uber Takes Robotaxis Nationwide" - https://news.example.com/2026/10/uber-robotaxi-expansion
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: A new data center chip order from several cloud providers lifted the stock.
+  Article: "Cloud Giants Line Up for NVIDIA's Next Chip" - https://news.example.com/2026/10/nvidia-data-center-orders
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: Strong cloud and ad revenue in its quarterly report beat expectations.
+  Article: "Alphabet Earnings Beat on Cloud Growth" - https://news.example.com/2026/10/alphabet-earnings-beat
+
+Top losers
+- Apple Inc (AAPL:NASDAQ) -25.00%: Reports of weaker phone demand and a delayed product launch weighed on the stock.
+  Article: "Apple Delays Launch Amid Soft Demand" - https://news.example.com/2026/10/apple-launch-delay
+- Tesla Inc (TSLA:NASDAQ) -20.00%: Quarterly deliveries came in well below analyst forecasts.
+  Article: "Tesla Deliveries Miss Estimates" - https://news.example.com/2026/10/tesla-deliveries-miss
+- Intel Corp (INTC:NASDAQ) -10.00%: Intel cut its full-year outlook, citing slower PC sales.
+  Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
+"""
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 XLSX_HEADER = ("Stock Name", "Stock Acronym", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference")
 
@@ -158,7 +177,7 @@ class FakeGenAI:
         try:
             if self.fail:
                 raise RuntimeError("Gemini made to fail by the test")
-            text = self.ask_gemini(GEMINI_MODEL or model_name, query) if GEMINI_KEY else CANNED_AI_ANSWER
+            text = self.ask_gemini(GEMINI_MODEL or model_name, query) if GEMINI_KEY else self.canned_answer(query)
         except Exception as e:
             text = "<raised {!r}>".format(e)
             raise
@@ -166,6 +185,11 @@ class FakeGenAI:
             with open(os.path.join(self.out_dir, "gemini_{}.txt".format(number)), "w") as out:
                 out.write("=== question (model {}) ===\n{}\n\n=== answer ===\n{}\n".format(GEMINI_MODEL or model_name, query, text))
         return types.SimpleNamespace(text=text)
+
+    @staticmethod
+    def canned_answer(query):
+        # the analyzer's insight question gets the canned insight, anything else (like the apology) the plain answer
+        return CANNED_INSIGHT if "top three gainers" in query else CANNED_AI_ANSWER
 
     @staticmethod
     def ask_gemini(model_name, query):
@@ -343,6 +367,12 @@ def test_distribution_sends_report(harness):
     workbook = openpyxl.load_workbook(harness.config["email_config"]["attachment"])
     assert workbook.sheetnames == ["Stock Data", "Insight"]
     assert list(workbook["Stock Data"].iter_rows(values_only=True)) == expected_rows
+    # gains are shaded green and losses red; no change is a plain black 0
+    data_sheet = workbook["Stock Data"]
+    uber, microsoft, apple = data_sheet["F2"], data_sheet["F12"], data_sheet["F21"]
+    assert uber.fill.fill_type == "solid" and uber.fill.start_color.rgb[-6:] == "469358"
+    assert apple.fill.fill_type == "solid" and apple.fill.start_color.rgb[-6:] == "B3261E"
+    assert microsoft.fill.fill_type is None and microsoft.number_format == "0"
 
     assert len(harness.genai.questions) == 1
     question = harness.genai.questions[0]
@@ -358,7 +388,7 @@ def test_distribution_sends_report(harness):
     assert email["subject"].startswith("Todays Stock Data ")
     assert email["contents"] and email["contents"] != AI_ERROR_ANSWER
     if not GEMINI_KEY:
-        assert email["contents"] == CANNED_AI_ANSWER
+        assert email["contents"] == CANNED_INSIGHT
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"] == expected_rows
     # the Insight sheet holds the blurb one line per row (blank lines come back as empty cells)

@@ -50,6 +50,26 @@ STOCKS = [
     (19, "JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0),          # -8%
     (20, "Walmart Inc", "WMT:NYSE", 100.0, 104.0),                  # +4%
 ]
+# A canned Gemini answer for the 20 test stocks. The articles and links are made up (example.com), not real news.
+CANNED_INSIGHT = """Today's biggest movers (canned test insight - these articles are made up)
+
+Top gainers
+- Uber Technologies Inc (UBER:NYSE) +20.00%: Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
+  Article: "Uber Takes Robotaxis Nationwide" - https://news.example.com/2026/10/uber-robotaxi-expansion
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: A new data center chip order from several cloud providers lifted the stock.
+  Article: "Cloud Giants Line Up for NVIDIA's Next Chip" - https://news.example.com/2026/10/nvidia-data-center-orders
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: Strong cloud and ad revenue in its quarterly report beat expectations.
+  Article: "Alphabet Earnings Beat on Cloud Growth" - https://news.example.com/2026/10/alphabet-earnings-beat
+
+Top losers
+- Apple Inc (AAPL:NASDAQ) -25.00%: Reports of weaker phone demand and a delayed product launch weighed on the stock.
+  Article: "Apple Delays Launch Amid Soft Demand" - https://news.example.com/2026/10/apple-launch-delay
+- Tesla Inc (TSLA:NASDAQ) -20.00%: Quarterly deliveries came in well below analyst forecasts.
+  Article: "Tesla Deliveries Miss Estimates" - https://news.example.com/2026/10/tesla-deliveries-miss
+- Intel Corp (INTC:NASDAQ) -10.00%: Intel cut its full-year outlook, citing slower PC sales.
+  Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
+"""
+
 STOCK_NAMES = {stock_id: (name, acronym) for (stock_id, name, acronym, _, _) in STOCKS}
 
 # Biggest gainer first, biggest loser last
@@ -113,17 +133,19 @@ def xlsx_row(acronym):
 
 
 def test_run_analyze(monkeypatch, tmp_path):
-    fake_genai = FakeGenAI("Uber rose and Apple fell.")
+    fake_genai = FakeGenAI(CANNED_INSIGHT)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
     xlsx_location = str(tmp_path / "report.xlsx")
     config = {"email_config": {"attachment": xlsx_location}}
 
     blurb = analyzer.run_analyze(MARIADB_DATA, FakeCursor(), config)
 
-    assert blurb == "Uber rose and Apple fell."
+    assert blurb == CANNED_INSIGHT
     assert len(fake_genai.questions) == 1
     rows = list(openpyxl.load_workbook(xlsx_location)["Stock Data"].iter_rows(values_only=True))
     assert rows == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in EXPECTED_ORDER]
+    insight = [row[0] for row in openpyxl.load_workbook(xlsx_location)["Insight"].iter_rows(values_only=True) if row[0]]
+    assert insight == [line for line in CANNED_INSIGHT.splitlines() if line]
 
 
 def test_format_findings():
@@ -146,13 +168,13 @@ def test_sort_findings():
 
 
 def test_get_insight(monkeypatch):
-    fake_genai = FakeGenAI("Here is today's insight.")
+    fake_genai = FakeGenAI(CANNED_INSIGHT)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
     sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
 
     blurb = analyzer.get_insight(sorted_data)
 
-    assert blurb == "Here is today's insight."
+    assert blurb == CANNED_INSIGHT
     question = fake_genai.questions[0]
     gainers, losers = question.split("Top losers:")
     assert "Uber Technologies Inc (UBER:NYSE): 70.0 -> 84.0 (+20.00%)" in gainers
@@ -167,16 +189,46 @@ def test_get_insight(monkeypatch):
     assert "Microsoft" not in question
 
 
+def test_shade_for_rate():
+    # the biggest move gets the darkest shade, with white text
+    assert analyzer.shade_for_rate(0.25, 0.25) == ("1E7B34", "FFFFFF")
+    assert analyzer.shade_for_rate(-0.25, 0.25) == ("B3261E", "FFFFFF")
+    # a small move is close to the light shade, with black text
+    assert analyzer.shade_for_rate(0.0025, 0.25) == ("E4F3E8", "000000")
+    assert analyzer.shade_for_rate(-0.0025, 0.25) == ("FBE6E4", "000000")
+    # halfway is halfway between light and dark
+    assert analyzer.shade_for_rate(0.125, 0.25) == ("82B88F", "000000")
+    # no change, or nothing moved at all, gets no shading
+    assert analyzer.shade_for_rate(0.0, 0.25) is None
+    assert analyzer.shade_for_rate(0.0, 0.0) is None
+
+
 def test_develop_xlsx(tmp_path):
     xlsx_location = str(tmp_path / "report.xlsx")
     sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
 
-    analyzer.develop_xlsx(sorted_data, "First line.\nSecond line.", xlsx_location)
+    analyzer.develop_xlsx(sorted_data, CANNED_INSIGHT, xlsx_location)
 
     workbook = openpyxl.load_workbook(xlsx_location)
     assert workbook.sheetnames == ["Stock Data", "Insight"]
     data_sheet = workbook["Stock Data"]
     assert list(data_sheet.iter_rows(values_only=True)) == \
         [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in EXPECTED_ORDER]
-    assert all(data_sheet.cell(row=row, column=6).number_format == "0.00%" for row in range(2, len(STOCKS) + 2))
-    assert list(workbook["Insight"].iter_rows(values_only=True)) == [("First line.",), ("Second line.",)]
+
+    # each percent difference is shaded green (gain) or red (loss), darker the further from 0;
+    # Apple's -25% is the biggest move, so it is the darkest
+    for row, f in enumerate(sorted_data, start=2):
+        cell = data_sheet.cell(row=row, column=6)
+        shade = analyzer.shade_for_rate(f["rate_of_change"], 0.25)
+        if f["rate_of_change"] == 0:
+            assert shade is None and cell.fill.fill_type is None
+            assert cell.number_format == "0" and cell.font.color.rgb[-6:] == "000000"
+        else:
+            assert cell.fill.fill_type == "solid" and cell.fill.start_color.rgb[-6:] == shade[0]
+            assert cell.font.color.rgb[-6:] == shade[1] and cell.number_format == "0.00%"
+    assert data_sheet["F21"].fill.start_color.rgb[-6:] == "B3261E"
+    green = [data_sheet.cell(row=row, column=6).fill.start_color.rgb for row in range(2, 12)]
+    assert green[0] != green[-1]
+
+    insight = [row[0] for row in workbook["Insight"].iter_rows(values_only=True) if row[0]]
+    assert insight == [line for line in CANNED_INSIGHT.splitlines() if line]
