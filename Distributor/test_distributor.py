@@ -62,7 +62,7 @@ Top losers
   Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
 """
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
-XLSX_HEADER = ("Stock Name", "Stock Acronym", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference")
+XLSX_HEADER = ("Stock Name", "Ticker", "Market", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference")
 
 SCHEMA = """
 CREATE TABLE STOCK (
@@ -340,36 +340,36 @@ def test_distribution_sends_report(harness):
 
     email = run_distribution(harness)
 
-    # Biggest gainer first, biggest loser last
+    # Alphabetical by market, then by name
     expected_rows = [
         XLSX_HEADER,
-        ("Uber Technologies Inc", "UBER:NYSE", 70.0, 84.0, 14.0, 0.2),
-        ("NVIDIA Corp", "NVDA:NASDAQ", 120.0, 138.0, 18.0, 0.15),
-        ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1),
-        ("Salesforce Inc", "CRM:NYSE", 300.0, 324.0, 24.0, 0.08),
-        ("Amazon.com Inc", "AMZN:NASDAQ", 180.0, 189.0, 9.0, 0.05),
-        ("Walmart Inc", "WMT:NYSE", 100.0, 104.0, 4.0, 0.04),
-        ("International Business Machines Corp", "IBM:NYSE", 200.0, 207.0, 7.0, 0.035),
-        ("Advanced Micro Devices Inc", "AMD:NASDAQ", 160.0, 164.0, 4.0, 0.025),
-        ("Netflix Inc", "NFLX:NASDAQ", 600.0, 612.0, 12.0, 0.02),
-        ("Coca-Cola Co", "KO:NYSE", 200.0, 202.0, 2.0, 0.01),
-        ("Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0, 0.0, 0.0),
-        ("PayPal Holdings Inc", "PYPL:NASDAQ", 80.0, 79.0, -1.0, -0.0125),
-        ("Meta Platforms Inc", "META:NASDAQ", 500.0, 490.0, -10.0, -0.02),
-        ("Walt Disney Co", "DIS:NYSE", 100.0, 97.0, -3.0, -0.03),
-        ("Oracle Corp", "ORCL:NYSE", 140.0, 133.0, -7.0, -0.05),
-        ("Adobe Inc", "ADBE:NASDAQ", 500.0, 470.0, -30.0, -0.06),
-        ("JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0, -12.0, -0.08),
-        ("Intel Corp", "INTC:NASDAQ", 30.0, 27.0, -3.0, -0.1),
-        ("Tesla Inc", "TSLA:NASDAQ", 250.0, 200.0, -50.0, -0.2),
-        ("Apple Inc", "AAPL:NASDAQ", 200.0, 150.0, -50.0, -0.25),
+        ("Adobe Inc", "ADBE", "NASDAQ", 500.0, 470.0, -30.0, -0.06),
+        ("Advanced Micro Devices Inc", "AMD", "NASDAQ", 160.0, 164.0, 4.0, 0.025),
+        ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1),
+        ("Amazon.com Inc", "AMZN", "NASDAQ", 180.0, 189.0, 9.0, 0.05),
+        ("Apple Inc", "AAPL", "NASDAQ", 200.0, 150.0, -50.0, -0.25),
+        ("Intel Corp", "INTC", "NASDAQ", 30.0, 27.0, -3.0, -0.1),
+        ("Meta Platforms Inc", "META", "NASDAQ", 500.0, 490.0, -10.0, -0.02),
+        ("Microsoft Corp", "MSFT", "NASDAQ", 50.0, 50.0, 0.0, 0.0),
+        ("Netflix Inc", "NFLX", "NASDAQ", 600.0, 612.0, 12.0, 0.02),
+        ("NVIDIA Corp", "NVDA", "NASDAQ", 120.0, 138.0, 18.0, 0.15),
+        ("PayPal Holdings Inc", "PYPL", "NASDAQ", 80.0, 79.0, -1.0, -0.0125),
+        ("Tesla Inc", "TSLA", "NASDAQ", 250.0, 200.0, -50.0, -0.2),
+        ("Coca-Cola Co", "KO", "NYSE", 200.0, 202.0, 2.0, 0.01),
+        ("International Business Machines Corp", "IBM", "NYSE", 200.0, 207.0, 7.0, 0.035),
+        ("JPMorgan Chase & Co", "JPM", "NYSE", 150.0, 138.0, -12.0, -0.08),
+        ("Oracle Corp", "ORCL", "NYSE", 140.0, 133.0, -7.0, -0.05),
+        ("Salesforce Inc", "CRM", "NYSE", 300.0, 324.0, 24.0, 0.08),
+        ("Uber Technologies Inc", "UBER", "NYSE", 70.0, 84.0, 14.0, 0.2),
+        ("Walmart Inc", "WMT", "NYSE", 100.0, 104.0, 4.0, 0.04),
+        ("Walt Disney Co", "DIS", "NYSE", 100.0, 97.0, -3.0, -0.03),
     ]
     workbook = openpyxl.load_workbook(harness.config["email_config"]["attachment"])
     assert workbook.sheetnames == ["Stock Data", "Insight"]
     assert list(workbook["Stock Data"].iter_rows(values_only=True)) == expected_rows
     # gains are shaded green and losses red; no change is a plain black 0
     data_sheet = workbook["Stock Data"]
-    uber, microsoft, apple = data_sheet["F2"], data_sheet["F12"], data_sheet["F21"]
+    uber, microsoft, apple = data_sheet["G19"], data_sheet["G9"], data_sheet["G6"]
     assert uber.fill.fill_type == "solid" and uber.fill.start_color.rgb[-6:] == "469358"
     assert apple.fill.fill_type == "solid" and apple.fill.start_color.rgb[-6:] == "B3261E"
     assert microsoft.fill.fill_type is None and microsoft.number_format == "0"
@@ -391,8 +391,12 @@ def test_distribution_sends_report(harness):
         assert email["contents"] == CANNED_INSIGHT
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"] == expected_rows
-    # the Insight sheet holds the blurb one line per row (blank lines come back as empty cells)
-    assert [row[0] for row in sheets["Insight"] if row[0]] == [line for line in email["contents"].splitlines() if line]
+    # the Insight sheet holds the blurb one line per row (blank lines come back as empty cells),
+    # with a cow face on the gainers headline and a bear face on the losers headline
+    insight = [row[0] for row in sheets["Insight"] if row[0]]
+    if not GEMINI_KEY:
+        assert insight == [{"Top gainers": "\U0001F42E Top gainers", "Top losers": "\U0001F43B Top losers"}.get(line, line)
+                           for line in CANNED_INSIGHT.splitlines() if line]
     assert_finished(harness)
 
 
@@ -420,6 +424,6 @@ def test_distribution_still_emails_when_ai_fails(harness):
     assert email["subject"].startswith("Todays Stock Data ")
     assert email["contents"] == AI_ERROR_ANSWER
     sheets = list(email["attachments"].values())[0]
-    assert sheets["Stock Data"] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0, 10.0, 0.1)]
+    assert sheets["Stock Data"] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
     assert sheets["Insight"] == [(AI_ERROR_ANSWER,)]
     assert_finished(harness)

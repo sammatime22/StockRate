@@ -24,14 +24,20 @@ TOP_COUNT = 3
 # xlsx layout
 DATA_SHEET_TITLE = "Stock Data"
 INSIGHT_SHEET_TITLE = "Insight"
-XLSX_HEADER = ["Stock Name", "Stock Acronym", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference"]
-DATA_COLUMN_WIDTHS = [38, 16, 18, 16, 18, 20]
+XLSX_HEADER = ["Stock Name", "Ticker", "Market", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference"]
+DATA_COLUMN_WIDTHS = [38, 10, 10, 18, 16, 18, 20]
 INSIGHT_COLUMN_WIDTH = 120
 
 # Percent difference shading: a move near 0 gets the light color, the biggest move of the day gets the dark one
 GAIN_LIGHT, GAIN_DARK = (0xE6, 0xF4, 0xEA), (0x1E, 0x7B, 0x34)
 LOSS_LIGHT, LOSS_DARK = (0xFC, 0xE8, 0xE6), (0xB3, 0x26, 0x1E)
 BLACK, WHITE = "000000", "FFFFFF"
+
+# Insight headlines: the AI is asked to head its sections with these, and the xlsx shows them bold with an emoji
+# (there is no bull face emoji, so the gainers get a cow face)
+GAINERS_HEADLINE = "Top gainers"
+LOSERS_HEADLINE = "Top losers"
+HEADLINE_EMOJIS = {GAINERS_HEADLINE: "\U0001F42E", LOSERS_HEADLINE: "\U0001F43B"}  # cow face, bear face
 
 logger = logging.getLogger()
 
@@ -162,8 +168,9 @@ def get_insight(sorted_data):
 
     query = ("Here are today's top three gainers and top three losers among the stocks we track.\n"
         "For each stock, please find a recent news article about it and write a short blurb on why it may have moved, "
-        "naming the article you used. Keep the whole answer short enough for an email.\n\n"
-        "Top gainers:\n{}\n\nTop losers:\n{}\n").format(describe(gainers), describe(losers))
+        "naming the article you used. Keep the whole answer short enough for an email.\n"
+        "Start the gainers section with a line saying only \"{}\" and the losers section with a line saying only \"{}\".\n\n"
+        "Top gainers:\n{}\n\nTop losers:\n{}\n").format(GAINERS_HEADLINE, LOSERS_HEADLINE, describe(gainers), describe(losers))
 
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
@@ -209,8 +216,9 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
     Creates:
     -----------
       - a file at the location of email_config -> attachment
-        (a "Stock Data" sheet with one row per stock, its percent difference shaded green or red,
-        and an "Insight" sheet with the blurb)
+        (a "Stock Data" sheet with one row per stock in alphabetical order by market then name, its acronym
+        split into ticker and market, and its percent difference shaded green or red; and an "Insight" sheet
+        with the blurb, its "Top gainers"/"Top losers" headlines in bold with a cow face/bear face emoji)
     '''
     workbook = openpyxl.Workbook()
 
@@ -219,12 +227,19 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
     data_sheet.append(XLSX_HEADER)
     for cell in data_sheet[1]:
         cell.font = Font(bold=True)
-    for column, width in zip("ABCDEF", DATA_COLUMN_WIDTHS):
+    for column, width in zip("ABCDEFG", DATA_COLUMN_WIDTHS):
         data_sheet.column_dimensions[column].width = width
 
-    max_abs_rate = max((abs(finding["rate_of_change"]) for finding in sorted_data), default=0)
+    rows = []
     for finding in sorted_data:
-        data_sheet.append([finding["stock_name"], finding["acronym"], finding["yesterday_price"],
+        # "GOOGL:NASDAQ" -> ticker "GOOGL", market "NASDAQ"
+        ticker, _, market = (finding["acronym"] or "").partition(":")
+        rows.append((finding["stock_name"] or "", ticker, market, finding))
+    rows.sort(key=lambda row: (row[2].casefold(), row[0].casefold()))
+
+    max_abs_rate = max((abs(finding["rate_of_change"]) for finding in sorted_data), default=0)
+    for (stock_name, ticker, market, finding) in rows:
+        data_sheet.append([stock_name, ticker, market, finding["yesterday_price"],
             finding["today_price"], finding["difference"], finding["rate_of_change"]])
         percent_cell = data_sheet.cell(row=data_sheet.max_row, column=len(XLSX_HEADER))
         shade = shade_for_rate(finding["rate_of_change"], max_abs_rate)
@@ -240,7 +255,14 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
 
     insight_sheet = workbook.create_sheet(INSIGHT_SHEET_TITLE)
     insight_sheet.column_dimensions["A"].width = INSIGHT_COLUMN_WIDTH
+    headlines = {headline.casefold(): headline for headline in HEADLINE_EMOJIS}
     for line in blurb.splitlines():
-        insight_sheet.append([line])
+        # match the headline even if the AI dressed it up, like "**Top Gainers**" or "## Top gainers:"
+        headline = headlines.get(line.strip(" *#_:").casefold())
+        if headline:
+            insight_sheet.append(["{} {}".format(HEADLINE_EMOJIS[headline], headline)])
+            insight_sheet.cell(row=insight_sheet.max_row, column=1).font = Font(bold=True)
+        else:
+            insight_sheet.append([line])
 
     workbook.save(xlsx_location)

@@ -77,6 +77,16 @@ EXPECTED_ORDER = ["UBER:NYSE", "NVDA:NASDAQ", "GOOGL:NASDAQ", "CRM:NYSE", "AMZN:
                   "AMD:NASDAQ", "NFLX:NASDAQ", "KO:NYSE", "MSFT:NASDAQ", "PYPL:NASDAQ", "META:NASDAQ", "DIS:NYSE",
                   "ORCL:NYSE", "ADBE:NASDAQ", "JPM:NYSE", "INTC:NASDAQ", "TSLA:NASDAQ", "AAPL:NASDAQ"]
 
+# The xlsx lists stocks alphabetically by market, then by name
+XLSX_ORDER = ["ADBE:NASDAQ", "AMD:NASDAQ", "GOOGL:NASDAQ", "AMZN:NASDAQ", "AAPL:NASDAQ", "INTC:NASDAQ", "META:NASDAQ",
+              "MSFT:NASDAQ", "NFLX:NASDAQ", "NVDA:NASDAQ", "PYPL:NASDAQ", "TSLA:NASDAQ",
+              "KO:NYSE", "IBM:NYSE", "JPM:NYSE", "ORCL:NYSE", "CRM:NYSE", "UBER:NYSE", "WMT:NYSE", "DIS:NYSE"]
+
+# How the Insight sheet should show CANNED_INSIGHT: the headlines get an emoji (and are bold)
+COW_FACE, BEAR_FACE = "\U0001F42E", "\U0001F43B"
+EXPECTED_INSIGHT = [{"Top gainers": COW_FACE + " Top gainers", "Top losers": BEAR_FACE + " Top losers"}.get(line, line)
+                    for line in CANNED_INSIGHT.splitlines() if line]
+
 # Newest pull first, as the distributor's query returns it: today's pull then yesterday's
 MARIADB_DATA = ([(stock_id, today) for (stock_id, _, _, _, today) in reversed(STOCKS)] +
                 [(stock_id, yesterday) for (stock_id, _, _, yesterday, _) in reversed(STOCKS)])
@@ -129,7 +139,8 @@ def finding(stock_id, with_names=True):
 
 def xlsx_row(acronym):
     f = next(finding(stock_id) for (stock_id, _, stock_acronym, _, _) in STOCKS if stock_acronym == acronym)
-    return (f["stock_name"], f["acronym"], f["yesterday_price"], f["today_price"], f["difference"], f["rate_of_change"])
+    ticker, market = acronym.split(":")
+    return (f["stock_name"], ticker, market, f["yesterday_price"], f["today_price"], f["difference"], f["rate_of_change"])
 
 
 def test_run_analyze(monkeypatch, tmp_path):
@@ -143,9 +154,9 @@ def test_run_analyze(monkeypatch, tmp_path):
     assert blurb == CANNED_INSIGHT
     assert len(fake_genai.questions) == 1
     rows = list(openpyxl.load_workbook(xlsx_location)["Stock Data"].iter_rows(values_only=True))
-    assert rows == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in EXPECTED_ORDER]
+    assert rows == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in XLSX_ORDER]
     insight = [row[0] for row in openpyxl.load_workbook(xlsx_location)["Insight"].iter_rows(values_only=True) if row[0]]
-    assert insight == [line for line in CANNED_INSIGHT.splitlines() if line]
+    assert insight == EXPECTED_INSIGHT
 
 
 def test_format_findings():
@@ -176,6 +187,7 @@ def test_get_insight(monkeypatch):
 
     assert blurb == CANNED_INSIGHT
     question = fake_genai.questions[0]
+    assert 'a line saying only "Top gainers"' in question and 'a line saying only "Top losers"' in question
     gainers, losers = question.split("Top losers:")
     assert "Uber Technologies Inc (UBER:NYSE): 70.0 -> 84.0 (+20.00%)" in gainers
     assert "NVIDIA Corp (NVDA:NASDAQ): 120.0 -> 138.0 (+15.00%)" in gainers
@@ -213,22 +225,30 @@ def test_develop_xlsx(tmp_path):
     assert workbook.sheetnames == ["Stock Data", "Insight"]
     data_sheet = workbook["Stock Data"]
     assert list(data_sheet.iter_rows(values_only=True)) == \
-        [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in EXPECTED_ORDER]
+        [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in XLSX_ORDER]
 
     # each percent difference is shaded green (gain) or red (loss), darker the further from 0;
     # Apple's -25% is the biggest move, so it is the darkest
-    for row, f in enumerate(sorted_data, start=2):
-        cell = data_sheet.cell(row=row, column=6)
-        shade = analyzer.shade_for_rate(f["rate_of_change"], 0.25)
-        if f["rate_of_change"] == 0:
+    for row in range(2, len(STOCKS) + 2):
+        cell = data_sheet.cell(row=row, column=7)
+        shade = analyzer.shade_for_rate(cell.value, 0.25)
+        if cell.value == 0:
             assert shade is None and cell.fill.fill_type is None
             assert cell.number_format == "0" and cell.font.color.rgb[-6:] == "000000"
         else:
             assert cell.fill.fill_type == "solid" and cell.fill.start_color.rgb[-6:] == shade[0]
             assert cell.font.color.rgb[-6:] == shade[1] and cell.number_format == "0.00%"
-    assert data_sheet["F21"].fill.start_color.rgb[-6:] == "B3261E"
-    green = [data_sheet.cell(row=row, column=6).fill.start_color.rgb for row in range(2, 12)]
-    assert green[0] != green[-1]
+    apple_row = XLSX_ORDER.index("AAPL:NASDAQ") + 2
+    assert data_sheet.cell(row=apple_row, column=7).fill.start_color.rgb[-6:] == "B3261E"
 
-    insight = [row[0] for row in workbook["Insight"].iter_rows(values_only=True) if row[0]]
-    assert insight == [line for line in CANNED_INSIGHT.splitlines() if line]
+    # the headlines get a cow face / bear face emoji and are bold; other lines are not bold
+    insight_sheet = workbook["Insight"]
+    assert [row[0] for row in insight_sheet.iter_rows(values_only=True) if row[0]] == EXPECTED_INSIGHT
+    for cell in [c for (c,) in insight_sheet.iter_rows() if c.value]:
+        assert bool(cell.font.bold) == (cell.value in (COW_FACE + " Top gainers", BEAR_FACE + " Top losers"))
+
+    # headlines are still found if the AI dresses them up
+    analyzer.develop_xlsx(sorted_data, "**Top Gainers**\nUp.\n## Top losers:\nDown.", xlsx_location)
+    insight_sheet = openpyxl.load_workbook(xlsx_location)["Insight"]
+    assert [row[0] for row in insight_sheet.iter_rows(values_only=True)] == \
+        [COW_FACE + " Top gainers", "Up.", BEAR_FACE + " Top losers", "Down."]
