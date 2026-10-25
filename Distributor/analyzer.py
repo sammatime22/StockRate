@@ -21,7 +21,7 @@ SELECT_STOCK_NAME_AND_ACRONYM = "SELECT stock_name, acronym FROM STOCK WHERE sto
 MISSING_PRICE = -1
 
 # AI settings
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 TOP_COUNT = 3
 GAINERS_HEADLINE = "Top gainers"
