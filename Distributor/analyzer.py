@@ -79,7 +79,6 @@ LOSS_LIGHT, LOSS_DARK = (0xFC, 0xE8, 0xE6), (0xB3, 0x26, 0x1E)
 BLACK, WHITE = "000000", "FFFFFF"
 
 # Emojis (there is no bull face emoji, so the gainers get a cow face)
-COW_FACE, BEAR_FACE = "\U0001F42E", "\U0001F43B"
 SUN, CLOUD, RAIN = "☀️", "⛅", "\U0001F327️"
 
 logger = logging.getLogger()
