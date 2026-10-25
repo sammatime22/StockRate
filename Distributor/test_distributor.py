@@ -194,12 +194,20 @@ class FakeGenAI:
     @staticmethod
     def ask_gemini(model_name, query):
         import requests
+        # accept "gemini-2.5-flash" or "models/gemini-2.5-flash", and ignore stray spaces around the key
+        model_name = model_name[len("models/"):] if model_name.startswith("models/") else model_name
         resp = requests.post(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(model_name),
-            headers={"x-goog-api-key": GEMINI_KEY},
+            headers={"x-goog-api-key": GEMINI_KEY.strip()},
             json={"contents": [{"parts": [{"text": query}]}]},
             timeout=60)
-        resp.raise_for_status()
+        if not resp.ok:
+            # show Google's own explanation (e.g. which model or key was rejected), not just the status code
+            try:
+                reason = resp.json()["error"]["message"]
+            except Exception:
+                reason = resp.text[:500]
+            raise RuntimeError("Gemini returned {} for model {}: {}".format(resp.status_code, model_name, reason))
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
