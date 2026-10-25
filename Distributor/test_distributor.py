@@ -397,8 +397,8 @@ def test_distribution_sends_report(harness):
     assert dashboard[3][0] == "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%"
     table = dashboard[7:13]
     assert [row[:3] for row in table] == [
-        ("+ Gainer", "UBER", 0.2), ("+ Gainer", "NVDA", 0.15), ("+ Gainer", "GOOGL", 0.1),
-        ("- Loser", "AAPL", -0.25), ("- Loser", "TSLA", -0.2), ("- Loser", "INTC", -0.1)]
+        ("\U0001F42E Gainer", "UBER", 0.2), ("\U0001F42E Gainer", "NVDA", 0.15), ("\U0001F42E Gainer", "GOOGL", 0.1),
+        ("\U0001F43B Loser", "AAPL", -0.25), ("\U0001F43B Loser", "TSLA", -0.2), ("\U0001F43B Loser", "INTC", -0.1)]
     if not GEMINI_KEY:
         assert [row[3] for row in table] == ["Product / orders", "Product / orders", "Earnings / results",
                                              "Product / orders", "Earnings / results", "Guidance / outlook"]
@@ -433,5 +433,5 @@ def test_distribution_still_emails_when_ai_fails(harness):
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"][:2] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
     # without the AI's answer the Dashboard still lists the gainer, just without details
-    assert sheets["Dashboard"][7] == ("+ Gainer", "GOOGL", 0.1, "—", "No article found for this stock.", "—")
+    assert sheets["Dashboard"][7] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—", "No article found for this stock.", "—")
     assert_finished(harness)

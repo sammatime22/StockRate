@@ -21,7 +21,7 @@ SELECT_STOCK_NAME_AND_ACRONYM = "SELECT stock_name, acronym FROM STOCK WHERE sto
 MISSING_PRICE = -1
 
 # AI settings
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 TOP_COUNT = 3
 GAINERS_HEADLINE = "Top gainers"
@@ -78,6 +78,8 @@ GAIN_LIGHT, GAIN_DARK = (0xE6, 0xF4, 0xEA), (0x1E, 0x7B, 0x34)
 LOSS_LIGHT, LOSS_DARK = (0xFC, 0xE8, 0xE6), (0xB3, 0x26, 0x1E)
 BLACK, WHITE = "000000", "FFFFFF"
 
+# Emojis (there is no bull face emoji, so the gainers get a cow face)
+COW_FACE, BEAR_FACE = "\U0001F42E", "\U0001F43B"
 SUN, CLOUD, RAIN = "☀️", "⛅", "\U0001F327️"
 
 logger = logging.getLogger()
@@ -373,8 +375,8 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
         cell.border = HEADER_BORDER
 
     details = parse_insight(blurb)
-    movers = [("{} Gainer".format("+"), finding) for finding in gainers] + \
-             [("{} Loser".format("-"), finding) for finding in losers]
+    movers = [("{} Gainer".format(COW_FACE), finding) for finding in gainers] + \
+             [("{} Loser".format(BEAR_FACE), finding) for finding in losers]
     for row, (side, finding) in enumerate(movers, start=DASHBOARD_HEADER_ROW + 1):
         ticker = ticker_and_market(finding)[0]
         detail = details.get(ticker.upper(), {})

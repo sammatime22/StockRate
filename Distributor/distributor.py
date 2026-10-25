@@ -139,7 +139,7 @@ class Distributor(stomp.ConnectionListener):
 
         # Gemini setup
         genai.configure(api_key=distributor_config_config[self.GOOGLE_GEMINI_CONFIG][self.MY_KEY])
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
         # check and gather the stock data from one pull ago and the most recent pull
         mariadb_cursor.execute(self.SELECT_ALL_DATA_FROM_PAST_DAYS)
