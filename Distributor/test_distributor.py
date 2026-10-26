@@ -7,6 +7,7 @@
 #
 #   test-output/<test name>/gemini_<n>.txt   the question asked of Gemini and its answer
 #   test-output/<test name>/email_<n>.txt    who the email would go to, subject, body and attachments
+#   test-output/<test name>/email_<n>.html   the email body, to preview in a browser (try your phone's screen size)
 #   test-output/<test name>/report.xlsx      the xlsx attachment the Distributor wrote (open it in Excel/Numbers)
 #   test-output/<test name>/distributor.log  the Distributor's own log
 #   test-output/<test name>/stockrate.db     the SQLite database after the run (open it with `sqlite3 stockrate.db`)
@@ -234,6 +235,8 @@ class FakeYagmail:
                     attached[path] = {sheet.title: list(sheet.iter_rows(values_only=True)) for sheet in workbook}
                 email = {"from": user, "to": to, "subject": subject, "contents": contents, "attachments": attached}
                 fake.sent.append(email)
+                with open(os.path.join(fake.out_dir, "email_{}.html".format(len(fake.sent))), "w") as out:
+                    out.write('<meta charset="utf-8"><meta name="viewport" content="width=device-width">{}'.format(contents))
                 with open(os.path.join(fake.out_dir, "email_{}.txt".format(len(fake.sent))), "w") as out:
                     out.write("From: {}\nTo: {}\nSubject: {}\n\n{}\n".format(user, ", ".join(to or []), subject, contents))
                     for path, sheets in attached.items():
@@ -394,9 +397,16 @@ def test_distribution_sends_report(harness):
     assert len(harness.yag.sent) == 1
     assert email["to"] == USERS
     assert email["subject"].startswith("Todays Stock Data ")
-    assert email["contents"] and email["contents"] != AI_ERROR_ANSWER
+    # the email body is the Dashboard as one line of HTML (yagmail would turn line breaks into <br>)
+    body = email["contents"]
+    assert "\n" not in body and AI_ERROR_ANSWER not in body
+    assert "⛅ Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%" in body
+    assert "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%" in body
+    positions = [body.index("<b>{}</b>".format(ticker)) for ticker in ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]]
+    assert positions == sorted(positions)
+    assert "Salesforce" not in body and "All 20 stocks are in the attached spreadsheet." in body
     if not GEMINI_KEY:
-        assert email["contents"] == CANNED_INSIGHT
+        assert '<a href="https://news.example.com/2026/10/uber-robotaxi-expansion">Uber Takes Robotaxis Nationwide</a>' in body
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"][:len(expected_rows)] == expected_rows
     # the Dashboard summarises the day and lists the top gainers and losers (rows 8-13)
@@ -437,7 +447,9 @@ def test_distribution_still_emails_when_ai_fails(harness):
     email = run_distribution(harness)
 
     assert email["subject"].startswith("Todays Stock Data ")
-    assert email["contents"] == AI_ERROR_ANSWER
+    # the email still has the Dashboard, with a note that the AI's insight is missing
+    assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
+    assert "No article found for this stock." in email["contents"]
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"][:2] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
     # without the AI's answer the Dashboard still lists the gainer, just without details

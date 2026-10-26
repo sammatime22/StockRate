@@ -2,6 +2,7 @@
 # sammatime, 2026
 import datetime
 import google.generativeai as genai
+import html
 import logging
 import openpyxl
 from openpyxl.comments import Comment
@@ -97,8 +98,8 @@ def run_analyze(mariadb_data, mariadb_cursor, config):
 
     Returns:
     -----------
-      - email contents that could be returned to the recipient describing the .xlsx file
-        (None if the data could not be analyzed, so the distributor sends an apology instead)
+      - email contents that could be returned to the recipient describing the .xlsx file: the Dashboard
+        as HTML, from develop_email (None if the data could not be analyzed, so the distributor sends an apology instead)
 
     Creates:
     -----------
@@ -126,7 +127,9 @@ def run_analyze(mariadb_data, mariadb_cursor, config):
 
         # develop_xlsx
         develop_xlsx(sorted_data, blurb, config[EMAIL_CONFIG][ATTACHMENT])
-        return blurb
+
+        # the Dashboard again, as the email body
+        return develop_email(sorted_data, blurb)
     except Exception as e:
         logger.error("Analysis failed: {}".format(e))
         traceback.print_exc()
@@ -312,6 +315,100 @@ def ticker_and_market(finding):
     return ticker, market
 
 
+def summarize_day(sorted_data):
+    '''
+    Sums up the day for the top of the Dashboard and the email.
+
+    Parameters:
+    -----------
+      sorted_data: a sorted set of stock data
+
+    Returns:
+    -----------
+      - (mood line, biggest move line), like
+        ("⛅ Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%",
+         "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%")
+    '''
+    rates = [finding["rate_of_change"] for finding in sorted_data]
+    up, down = sum(rate > 0 for rate in rates), sum(rate < 0 for rate in rates)
+    average = sum(rates) / len(rates) if rates else 0
+    if up >= 2 * down and up > 0:
+        mood = "{} Up day".format(SUN)
+    elif down >= 2 * up and down > 0:
+        mood = "{} Down day".format(RAIN)
+    else:
+        mood = "{} Mixed day".format(CLOUD)
+    mood_line = "{} — {} up · {} down · {} flat · watchlist average {}".format(
+        mood, up, down, len(rates) - up - down, describe_move(average))
+
+    gainers, losers = top_movers(sorted_data)
+    biggest_gain = "{} {}".format(ticker_and_market(gainers[0])[0], describe_move(gainers[0]["rate_of_change"])) \
+        if gainers else PLACEHOLDER
+    biggest_drop = "{} {}".format(ticker_and_market(losers[0])[0], describe_move(losers[0]["rate_of_change"])) \
+        if losers else PLACEHOLDER
+    return mood_line, "Biggest gain {} · biggest drop {}".format(biggest_gain, biggest_drop)
+
+
+def develop_email(sorted_data, blurb):
+    '''
+    Develops the email body: the Dashboard as simple HTML that reads well on a phone.
+
+    Parameters:
+    -----------
+      sorted_data: a sorted set of stock data
+      blurb: the blurb from get_insight
+
+    Returns:
+    -----------
+      - the email body as one line of HTML (yagmail turns line breaks into <br>, so there are none): the title
+        and date, the summary of the day, the biggest gain and drop, then each top gainer and loser with its
+        move, driver, what happened and a link to the article
+    '''
+    esc = html.escape
+    mood_line, biggest_line = summarize_day(sorted_data)
+    gainers, losers = top_movers(sorted_data)
+    details = parse_insight(blurb)
+
+    parts = ['<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:600px;color:#222;">',
+             '<div style="font-size:20px;font-weight:bold;">{}</div>'.format(esc(REPORT_TITLE)),
+             '<div style="font-size:12px;font-style:italic;color:#52514E;">Report for {}</div>'.format(
+                 datetime.date.today().isoformat()),
+             '<div style="font-size:16px;font-weight:bold;margin-top:12px;">{}</div>'.format(esc(mood_line)),
+             '<div style="font-size:14px;margin-top:4px;">{}</div>'.format(esc(biggest_line))]
+    if blurb == AI_ERROR_ANSWER:
+        parts.append('<div style="font-size:13px;font-style:italic;color:#52514E;margin-top:8px;">{}</div>'.format(
+            esc(AI_ERROR_ANSWER)))
+
+    for (emoji, headline, findings) in [(COW_FACE, GAINERS_HEADLINE, gainers), (BEAR_FACE, LOSERS_HEADLINE, losers)]:
+        if not findings:
+            continue
+        parts.append('<div style="font-size:16px;font-weight:bold;margin-top:18px;border-bottom:1px solid #C3C2B7;'
+                     'padding-bottom:4px;">{} {}</div>'.format(emoji, esc(headline)))
+        for finding in findings:
+            ticker = ticker_and_market(finding)[0]
+            detail = details.get(ticker.upper(), {})
+            color = "#1E7B34" if finding["rate_of_change"] > 0 else "#B3261E"
+            parts.append('<div style="margin-top:10px;">')
+            parts.append('<div style="font-size:15px;"><b>{}</b> <span style="color:{};font-weight:bold;">{}</span>'
+                         '<span style="color:#52514E;"> · {}</span></div>'.format(
+                             esc(ticker), color, esc(describe_move(finding["rate_of_change"])),
+                             esc(detail.get("driver") or PLACEHOLDER)))
+            if detail.get("what_happened"):
+                parts.append('<div style="font-size:14px;margin-top:2px;">{}</div>'.format(esc(detail["what_happened"])))
+            else:
+                parts.append('<div style="font-size:14px;margin-top:2px;font-style:italic;color:#52514E;">{}</div>'
+                             .format(esc(NO_ARTICLE)))
+            if detail.get("article") and detail.get("url"):
+                parts.append('<div style="font-size:13px;margin-top:2px;"><a href="{}">{}</a></div>'.format(
+                    esc(detail["url"], quote=True), esc(detail["article"])))
+            parts.append('</div>')
+
+    parts.append('<div style="font-size:12px;color:#52514E;margin-top:18px;">All {} stocks are in the attached '
+                 'spreadsheet.</div>'.format(len(sorted_data)))
+    parts.append('</div>')
+    return "".join(parts)
+
+
 def develop_xlsx(sorted_data, blurb, xlsx_location):
     '''
     Uses information gathered earlier in the function calls and develops an xlsx from it.
@@ -348,25 +445,11 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
     dashboard["A2"] = "Report for {}".format(datetime.date.today().isoformat())
     dashboard["A2"].font = NOTE_FONT
 
-    rates = [finding["rate_of_change"] for finding in sorted_data]
-    up, down = sum(rate > 0 for rate in rates), sum(rate < 0 for rate in rates)
-    average = sum(rates) / len(rates) if rates else 0
-    if up >= 2 * down and up > 0:
-        mood = "{} Up day".format(SUN)
-    elif down >= 2 * up and down > 0:
-        mood = "{} Down day".format(RAIN)
-    else:
-        mood = "{} Mixed day".format(CLOUD)
-    dashboard["A3"] = "{} — {} up · {} down · {} flat · watchlist average {}".format(
-        mood, up, down, len(rates) - up - down, describe_move(average))
+    mood_line, biggest_line = summarize_day(sorted_data)
+    dashboard["A3"] = mood_line
     dashboard["A3"].font = SUMMARY_FONT
-
+    dashboard["A4"] = biggest_line
     gainers, losers = top_movers(sorted_data)
-    biggest_gain = "{} {}".format(ticker_and_market(gainers[0])[0], describe_move(gainers[0]["rate_of_change"])) \
-        if gainers else PLACEHOLDER
-    biggest_drop = "{} {}".format(ticker_and_market(losers[0])[0], describe_move(losers[0]["rate_of_change"])) \
-        if losers else PLACEHOLDER
-    dashboard["A4"] = "Biggest gain {} · biggest drop {}".format(biggest_gain, biggest_drop)
 
     # ---- Dashboard: the top gainers and losers, with details from the blurb
     for column, header in enumerate(DASHBOARD_HEADER, start=1):
@@ -410,7 +493,7 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
 
     rows = sorted(sorted_data, key=lambda finding: (ticker_and_market(finding)[1].casefold(),
                                                     (finding["stock_name"] or "").casefold()))
-    max_abs_rate = max((abs(rate) for rate in rates), default=0)
+    max_abs_rate = max((abs(finding["rate_of_change"]) for finding in sorted_data), default=0)
     for finding in rows:
         ticker, market = ticker_and_market(finding)
         data_sheet.append([finding["stock_name"] or "", ticker, market, finding["yesterday_price"],

@@ -171,7 +171,9 @@ def test_run_analyze(monkeypatch, tmp_path):
 
     blurb = analyzer.run_analyze(MARIADB_DATA, FakeCursor(), config)
 
-    assert blurb == CANNED_INSIGHT
+    # the email body is the Dashboard as HTML
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+    assert blurb == analyzer.develop_email(sorted_data, CANNED_INSIGHT)
     assert len(fake_genai.questions) == 1
     workbook = openpyxl.load_workbook(xlsx_location)
     rows = list(workbook["Stock Data"].iter_rows(values_only=True))[:len(STOCKS) + 1]
@@ -256,6 +258,48 @@ def test_describe_move():
 def test_ticker_and_market():
     assert analyzer.ticker_and_market(finding(1)) == ("GOOGL", "NASDAQ")
     assert analyzer.ticker_and_market(finding(1, with_names=False)) == ("", "")
+
+
+def test_summarize_day():
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+
+    assert analyzer.summarize_day(sorted_data) == (
+        "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%",
+        "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%")
+    # mostly up, mostly down, and nothing to report
+    assert analyzer.summarize_day([finding(16), finding(1), finding(2)])[0].startswith("\u2600\ufe0f Up day — 2 up · 1 down")
+    assert analyzer.summarize_day([finding(2), finding(7), finding(1)])[0].startswith("\U0001F327\ufe0f Down day — 1 up · 2 down")
+    assert analyzer.summarize_day([finding(3)]) == ("\u26c5 Mixed day — 0 up · 0 down · 1 flat · watchlist average 0.00%",
+                                                    "Biggest gain — · biggest drop —")
+
+
+def test_develop_email():
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+
+    body = analyzer.develop_email(sorted_data, CANNED_INSIGHT)
+
+    # one line of HTML, since yagmail turns line breaks into <br>
+    assert "\n" not in body and body.startswith("<div") and body.endswith("</div>")
+    assert "End-of-day watchlist report" in body
+    assert "Report for {}".format(datetime.date.today().isoformat()) in body
+    assert "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%" in body
+    assert "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%" in body
+    assert body.index(COW_FACE + " Top gainers") < body.index(BEAR_FACE + " Top losers")
+    # each mover in order, with its move, driver, what happened and article link (& and ' are escaped)
+    positions = []
+    for (_, ticker, move, driver, what_happened, article, url) in EXPECTED_DASHBOARD:
+        positions.append(body.index("<b>{}</b>".format(ticker)))
+        assert analyzer.describe_move(move) in body
+        assert driver in body and what_happened in body
+        assert '<a href="{}">{}</a>'.format(url, article.replace("'", "&#x27;")) in body
+    assert positions == sorted(positions)
+    assert "Salesforce" not in body and "All 20 stocks are in the attached spreadsheet." in body
+    assert analyzer.AI_ERROR_ANSWER not in body
+
+    # if the AI failed, the movers are still listed, with a note
+    body = analyzer.develop_email(sorted_data, analyzer.AI_ERROR_ANSWER)
+    assert analyzer.AI_ERROR_ANSWER in body and "<b>UBER</b>" in body and "No article found for this stock." in body
+    assert "<a href" not in body
 
 
 def test_shade_for_rate():
