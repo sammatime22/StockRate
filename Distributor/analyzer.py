@@ -24,9 +24,10 @@ MISSING_PRICE = -1
 
 # AI settings
 # Models to try in order: if one fails (busy with "503 high demand", or a "504 Deadline Exceeded"),
-# wait and ask the next one, waiting 30 seconds before the second and 60 before the third
-GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]
-AI_RETRY_WAITS = [30, 60]
+# wait and ask the next one: 30 seconds before the second, 60 before the third and 90 before the fourth
+# (Flash-Lite last: a lighter model, often still free when the others are busy)
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite"]
+AI_RETRY_WAITS = [30, 60, 90]
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 TOP_COUNT = 3
 # Distribution runs once a day and nothing waits on it, so Gemini can take up to 10 minutes to answer

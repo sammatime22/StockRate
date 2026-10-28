@@ -455,9 +455,9 @@ def test_distribution_still_emails_when_ai_fails(harness):
     email = run_distribution(harness)
 
     assert email["subject"].startswith("Todays Stock Data ")
-    # Gemini was asked three times (waiting 30 then 60 seconds in between), then the email still has the
-    # Dashboard, with a note that the AI's insight is missing
-    assert len(harness.genai.questions) == 3 and harness.waits == [30, 60]
+    # each of the four Gemini models was asked (waiting 30, 60 then 90 seconds in between), then the email
+    # still has the Dashboard, with a note that the AI's insight is missing
+    assert len(harness.genai.questions) == 4 and harness.waits == [30, 60, 90]
     assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
     assert "No article found for this stock." in email["contents"]
     sheets = list(email["attachments"].values())[0]
