@@ -129,19 +129,25 @@ class FakeCursor:
 
 class FakeGenAI:
     '''
-    Records the question asked and gives a canned answer.
+    Records the question asked (and its request options) and gives a canned answer;
+    the first `failures` questions raise instead, like a 504 Deadline Exceeded.
     '''
 
-    def __init__(self, answer):
+    def __init__(self, answer, failures=0):
         self.answer = answer
+        self.failures = failures
         self.questions = []
+        self.request_options = []
 
     def GenerativeModel(self, model_name):
         fake = self
 
         class Model:
-            def generate_content(self, query):
+            def generate_content(self, query, request_options=None):
                 fake.questions.append(query)
+                fake.request_options.append(request_options)
+                if len(fake.questions) <= fake.failures:
+                    raise RuntimeError("504 Deadline Exceeded")
                 return types.SimpleNamespace(text=fake.answer)
 
         return Model()
@@ -234,6 +240,19 @@ def test_get_insight(monkeypatch):
     assert "Salesforce" not in question
     assert "JPMorgan" not in question
     assert "Microsoft" not in question
+    # Gemini gets up to 10 minutes to answer
+    assert fake_genai.request_options == [{"timeout": 600}]
+
+    # a failed ask (like a 504 Deadline Exceeded) is tried once more...
+    fake_genai = FakeGenAI(CANNED_INSIGHT, failures=1)
+    monkeypatch.setattr(analyzer, "genai", fake_genai)
+    assert analyzer.get_insight(sorted_data) == CANNED_INSIGHT
+    assert len(fake_genai.questions) == 2
+    # ...but not forever: after two failures the error answer is used
+    fake_genai = FakeGenAI(CANNED_INSIGHT, failures=2)
+    monkeypatch.setattr(analyzer, "genai", fake_genai)
+    assert analyzer.get_insight(sorted_data) == analyzer.AI_ERROR_ANSWER
+    assert len(fake_genai.questions) == 2
 
 
 def test_parse_insight():

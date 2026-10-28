@@ -25,6 +25,10 @@ MISSING_PRICE = -1
 GEMINI_MODEL = "gemini-3.8-flash"
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 TOP_COUNT = 3
+# Distribution runs once a day and nothing waits on it, so Gemini can take up to 10 minutes to answer,
+# and gets one more try if the first ask fails (e.g. "504 Deadline Exceeded")
+AI_TIMEOUT_SECONDS = 600
+AI_ATTEMPTS = 2
 GAINERS_HEADLINE = "Top gainers"
 LOSERS_HEADLINE = "Top losers"
 DRIVERS = ["Earnings / results", "Product / orders", "Guidance / outlook", "Analyst rating", "Macro / sector",
@@ -220,7 +224,7 @@ def get_insight(sorted_data):
 
     Returns:
     -----------
-      - a blurb for both the email and the xlsx file
+      - a blurb for both the email and the xlsx file (AI_ERROR_ANSWER if both tries fail)
     '''
     gainers, losers = top_movers(sorted_data)
 
@@ -240,13 +244,14 @@ def get_insight(sorted_data):
         "Top gainers:\n{}\n\nTop losers:\n{}\n").format(GAINERS_HEADLINE, LOSERS_HEADLINE, ", ".join(DRIVERS),
             describe(gainers), describe(losers))
 
-    try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        return model.generate_content(query).text
-    except Exception as e:
-        logger.error("AI query failed: {}".format(e))
-        traceback.print_exc()
-        return AI_ERROR_ANSWER
+    for attempt in range(1, AI_ATTEMPTS + 1):
+        try:
+            model = genai.GenerativeModel(GEMINI_MODEL)
+            return model.generate_content(query, request_options={"timeout": AI_TIMEOUT_SECONDS}).text
+        except Exception as e:
+            logger.error("AI query failed (attempt {} of {}): {}".format(attempt, AI_ATTEMPTS, e))
+            traceback.print_exc()
+    return AI_ERROR_ANSWER
 
 
 def parse_insight(blurb):

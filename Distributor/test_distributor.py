@@ -167,7 +167,7 @@ class FakeGenAI:
         fake = self
 
         class Model:
-            def generate_content(self, query):
+            def generate_content(self, query, request_options=None):
                 return fake.answer(model_name, query)
 
         return Model()
@@ -201,7 +201,7 @@ class FakeGenAI:
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(model_name),
             headers={"x-goog-api-key": GEMINI_KEY.strip()},
             json={"contents": [{"parts": [{"text": query}]}]},
-            timeout=60)
+            timeout=600)  # same as analyzer.AI_TIMEOUT_SECONDS
         if not resp.ok:
             # show Google's own explanation (e.g. which model or key was rejected), not just the status code
             try:
@@ -447,7 +447,8 @@ def test_distribution_still_emails_when_ai_fails(harness):
     email = run_distribution(harness)
 
     assert email["subject"].startswith("Todays Stock Data ")
-    # the email still has the Dashboard, with a note that the AI's insight is missing
+    # Gemini was asked twice (one retry), then the email still has the Dashboard, with a note that the AI's insight is missing
+    assert len(harness.genai.questions) == 2
     assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
     assert "No article found for this stock." in email["contents"]
     sheets = list(email["attachments"].values())[0]
