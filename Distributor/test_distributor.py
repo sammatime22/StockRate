@@ -393,8 +393,14 @@ def test_distribution_sends_report(harness):
     assert apple.fill.fill_type == "solid" and apple.fill.start_color.rgb[-6:] == "B3261E"
     assert microsoft.fill.fill_type is None and microsoft.font.color.rgb[-6:] == "000000"
 
-    assert len(harness.genai.questions) == 1
-    question = harness.genai.questions[0]
+    # the canned answer comes on the first ask; real Gemini may skip busy models, asking the same question
+    # of up to every model in analyzer.GEMINI_MODELS
+    questions = harness.genai.questions
+    if GEMINI_KEY:
+        assert 1 <= len(questions) <= len(sys.modules["analyzer"].GEMINI_MODELS) and len(set(questions)) == 1
+    else:
+        assert len(questions) == 1
+    question = questions[0]
     assert "top three gainers and top three losers" in question
     gainers, losers = question.split("Top losers:")
     assert all(name in gainers for name in ["Uber Technologies Inc", "NVIDIA Corp", "Alphabet Inc Class A"])
