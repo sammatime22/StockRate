@@ -23,15 +23,14 @@ SELECT_STOCK_NAME_AND_ACRONYM = "SELECT stock_name, acronym FROM STOCK WHERE sto
 MISSING_PRICE = -1
 
 # AI settings
-GEMINI_MODEL = "gemini-3.8-flash"
+# Models to try in order: if one fails (busy with "503 high demand", or a "504 Deadline Exceeded"),
+# wait and ask the next one, waiting 30 seconds before the second and 60 before the third
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]
+AI_RETRY_WAITS = [30, 60]
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 TOP_COUNT = 3
 # Distribution runs once a day and nothing waits on it, so Gemini can take up to 10 minutes to answer
 AI_TIMEOUT_SECONDS = 600
-# If Gemini fails (busy with "503 high demand", or a "504 Deadline Exceeded"), wait and try again:
-# 3 tries in all, waiting 30 seconds before the second and 60 before the third
-AI_RETRY_WAITS = [30, 60]
-AI_ATTEMPTS = len(AI_RETRY_WAITS) + 1
 GAINERS_HEADLINE = "Top gainers"
 LOSERS_HEADLINE = "Top losers"
 DRIVERS = ["Earnings / results", "Product / orders", "Guidance / outlook", "Analyst rating", "Macro / sector",
@@ -227,7 +226,7 @@ def get_insight(sorted_data):
 
     Returns:
     -----------
-      - a blurb for both the email and the xlsx file (AI_ERROR_ANSWER if every try fails)
+      - a blurb for both the email and the xlsx file (AI_ERROR_ANSWER if every model in GEMINI_MODELS fails)
     '''
     gainers, losers = top_movers(sorted_data)
 
@@ -247,16 +246,16 @@ def get_insight(sorted_data):
         "Top gainers:\n{}\n\nTop losers:\n{}\n").format(GAINERS_HEADLINE, LOSERS_HEADLINE, ", ".join(DRIVERS),
             describe(gainers), describe(losers))
 
-    for attempt in range(1, AI_ATTEMPTS + 1):
+    for attempt, model_name in enumerate(GEMINI_MODELS, start=1):
         try:
-            model = genai.GenerativeModel(GEMINI_MODEL)
+            model = genai.GenerativeModel(model_name)
             return model.generate_content(query, request_options={"timeout": AI_TIMEOUT_SECONDS}).text
         except Exception as e:
-            logger.error("AI query failed (attempt {} of {}): {}".format(attempt, AI_ATTEMPTS, e))
+            logger.error("AI query to {} failed (attempt {} of {}): {}".format(model_name, attempt, len(GEMINI_MODELS), e))
             traceback.print_exc()
-            if attempt < AI_ATTEMPTS:
+            if attempt < len(GEMINI_MODELS):
                 wait = AI_RETRY_WAITS[attempt - 1]
-                logger.info("Waiting {} seconds before asking the AI again".format(wait))
+                logger.info("Waiting {} seconds before asking {}".format(wait, GEMINI_MODELS[attempt]))
                 sleep(wait)
     return AI_ERROR_ANSWER
 

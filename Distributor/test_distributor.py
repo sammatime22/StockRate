@@ -20,7 +20,7 @@
 #
 # Optional environment variables:
 #   STOCKRATE_GEMINI_KEY    ask the real Gemini (via its REST API) instead of using canned answers
-#   STOCKRATE_GEMINI_MODEL  model to ask when STOCKRATE_GEMINI_KEY is set (default: the one distributor.py uses)
+#   STOCKRATE_GEMINI_MODEL  model to ask when STOCKRATE_GEMINI_KEY is set (default: the ones distributor.py and analyzer.py use)
 #   STOCKRATE_OUT           output directory (default: ./test-output)
 import asyncio
 import datetime

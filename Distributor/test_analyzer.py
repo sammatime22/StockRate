@@ -138,9 +138,11 @@ class FakeGenAI:
         self.failures = failures
         self.questions = []
         self.request_options = []
+        self.models = []
 
     def GenerativeModel(self, model_name):
         fake = self
+        fake.models.append(model_name)
 
         class Model:
             def generate_content(self, query, request_options=None):
@@ -240,17 +242,17 @@ def test_get_insight(monkeypatch):
     assert "Salesforce" not in question
     assert "JPMorgan" not in question
     assert "Microsoft" not in question
-    # Gemini gets up to 10 minutes to answer
-    assert fake_genai.request_options == [{"timeout": 600}]
+    # Gemini 3.8 Flash is asked first, and gets up to 10 minutes to answer
+    assert fake_genai.models == ["gemini-3.8-flash"] and fake_genai.request_options == [{"timeout": 600}]
 
-    # a failed ask (like a 503 high demand) is tried again after waiting (recorded here, not really waited)...
+    # if a model fails (like a 503 high demand), the next one is asked after waiting (recorded here, not really waited)...
     waits = []
     monkeypatch.setattr(analyzer, "sleep", waits.append)
     fake_genai = FakeGenAI(CANNED_INSIGHT, failures=2)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
     assert analyzer.get_insight(sorted_data) == CANNED_INSIGHT
-    assert len(fake_genai.questions) == 3 and waits == [30, 60]
-    # ...but not forever: after three failures the error answer is used, with no wait after the last
+    assert fake_genai.models == ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"] and waits == [30, 60]
+    # ...but if all three fail, the error answer is used, with no wait after the last
     waits.clear()
     fake_genai = FakeGenAI(CANNED_INSIGHT, failures=3)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
