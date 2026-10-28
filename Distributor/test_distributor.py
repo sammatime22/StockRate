@@ -31,6 +31,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import types
 
 import openpyxl
@@ -292,6 +293,13 @@ def harness(monkeypatch, request):
     monkeypatch.delitem(sys.modules, "analyzer", raising=False)
 
     module = importlib.import_module("distributor")
+    # record the analyzer's waits between AI retries; only really wait when asking the real Gemini
+    waits = []
+    def record_wait(seconds):
+        waits.append(seconds)
+        if GEMINI_KEY and not genai.fail:
+            time.sleep(seconds)
+    monkeypatch.setattr(sys.modules["analyzer"], "sleep", record_wait)
     config = {
         "maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"},
         "google_gemini_config": {"my_key": "test-gemini-key"},
@@ -303,7 +311,7 @@ def harness(monkeypatch, request):
     distributor.set_stomp_connection(stomp_connection)
 
     harness = types.SimpleNamespace(distributor=distributor, db=sqlite_connection, genai=genai, yag=yag,
-                                    stomp=stomp_connection, out_dir=out_dir, config=config)
+                                    stomp=stomp_connection, out_dir=out_dir, config=config, waits=waits)
     yield harness
 
     logging.getLogger().removeHandler(module.Distributor.handler)
@@ -447,8 +455,9 @@ def test_distribution_still_emails_when_ai_fails(harness):
     email = run_distribution(harness)
 
     assert email["subject"].startswith("Todays Stock Data ")
-    # Gemini was asked twice (one retry), then the email still has the Dashboard, with a note that the AI's insight is missing
-    assert len(harness.genai.questions) == 2
+    # Gemini was asked three times (waiting 30 then 60 seconds in between), then the email still has the
+    # Dashboard, with a note that the AI's insight is missing
+    assert len(harness.genai.questions) == 3 and harness.waits == [30, 60]
     assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
     assert "No article found for this stock." in email["contents"]
     sheets = list(email["attachments"].values())[0]

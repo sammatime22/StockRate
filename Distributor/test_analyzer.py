@@ -243,16 +243,19 @@ def test_get_insight(monkeypatch):
     # Gemini gets up to 10 minutes to answer
     assert fake_genai.request_options == [{"timeout": 600}]
 
-    # a failed ask (like a 504 Deadline Exceeded) is tried once more...
-    fake_genai = FakeGenAI(CANNED_INSIGHT, failures=1)
-    monkeypatch.setattr(analyzer, "genai", fake_genai)
-    assert analyzer.get_insight(sorted_data) == CANNED_INSIGHT
-    assert len(fake_genai.questions) == 2
-    # ...but not forever: after two failures the error answer is used
+    # a failed ask (like a 503 high demand) is tried again after waiting (recorded here, not really waited)...
+    waits = []
+    monkeypatch.setattr(analyzer, "sleep", waits.append)
     fake_genai = FakeGenAI(CANNED_INSIGHT, failures=2)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
+    assert analyzer.get_insight(sorted_data) == CANNED_INSIGHT
+    assert len(fake_genai.questions) == 3 and waits == [30, 60]
+    # ...but not forever: after three failures the error answer is used, with no wait after the last
+    waits.clear()
+    fake_genai = FakeGenAI(CANNED_INSIGHT, failures=3)
+    monkeypatch.setattr(analyzer, "genai", fake_genai)
     assert analyzer.get_insight(sorted_data) == analyzer.AI_ERROR_ANSWER
-    assert len(fake_genai.questions) == 2
+    assert len(fake_genai.questions) == 3 and waits == [30, 60]
 
 
 def test_parse_insight():
