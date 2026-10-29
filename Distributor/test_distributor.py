@@ -2,8 +2,9 @@
 # sammatime22, 2026
 #
 # MariaDB is replaced by an in-memory SQLite database that runs the Distributor's real SQL,
-# STOMP and yagmail are replaced by recorders (no email is ever sent), and Gemini gives a
-# canned answer unless STOCKRATE_GEMINI_KEY is set. Each test writes to its own folder:
+# STOMP and yagmail are replaced by recorders (no email is ever sent), Gemini gives a canned answer
+# unless STOCKRATE_GEMINI_KEY is set, and Google News gives canned (made-up) headlines unless
+# STOCKRATE_LIVE_NEWS is set. Each test writes to its own folder:
 #
 #   test-output/<test name>/gemini_<n>.txt   the question asked of Gemini and its answer
 #   test-output/<test name>/email_<n>.txt    who the email would go to, subject, body and attachments
@@ -21,10 +22,13 @@
 # Optional environment variables:
 #   STOCKRATE_GEMINI_KEY    ask the real Gemini (via its REST API) instead of using canned answers
 #   STOCKRATE_GEMINI_MODEL  model to ask when STOCKRATE_GEMINI_KEY is set (default: the ones distributor.py and analyzer.py use)
+#   STOCKRATE_LIVE_NEWS     set to 1 to get the top movers' latest news from the real Google News
 #   STOCKRATE_OUT           output directory (default: ./test-output)
 import asyncio
 import datetime
+import html
 import importlib
+import io
 import json
 import logging
 import os
@@ -33,6 +37,7 @@ import sqlite3
 import sys
 import time
 import types
+from urllib.parse import unquote_plus
 
 import openpyxl
 import pytest
@@ -41,27 +46,33 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 GEMINI_KEY = os.environ.get("STOCKRATE_GEMINI_KEY")
 GEMINI_MODEL = os.environ.get("STOCKRATE_GEMINI_MODEL")
+LIVE_NEWS = bool(os.environ.get("STOCKRATE_LIVE_NEWS"))
 OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "test-output")))
 
 CANNED_AI_ANSWER = "Canned AI answer (set STOCKRATE_GEMINI_KEY to ask Gemini for real)."
-# A canned Gemini answer for the 20 test stocks. The articles and links are made up (example.com), not real news.
-CANNED_INSIGHT = """Today's biggest movers (canned test insight - these articles are made up)
+# Canned latest news for the top movers, as Google News would give it: ticker -> (headline, source, link).
+# The headlines and links are made up (news.example.com), not real news.
+CANNED_NEWS = {
+    "UBER": ("Uber Takes Robotaxis to Ten More Cities", "Example News", "https://news.example.com/2026/10/uber-robotaxi-expansion"),
+    "NVDA": ("Cloud Giants Line Up for NVIDIA's Next Chip", "Example Wire", "https://news.example.com/2026/10/nvidia-data-center-orders"),
+    "GOOGL": ("Alphabet Earnings Beat on Cloud Growth", "Example News", "https://news.example.com/2026/10/alphabet-earnings-beat"),
+    "AAPL": ("Apple Delays Launch Amid Soft Demand", "Example Wire", "https://news.example.com/2026/10/apple-launch-delay"),
+    "TSLA": ("Tesla Deliveries Miss Estimates", "Example News", "https://news.example.com/2026/10/tesla-deliveries-miss"),
+    "INTC": ("Intel Lowers Guidance on PC Slump", "Example Wire", "https://news.example.com/2026/10/intel-guidance-cut"),
+}
+
+# A canned Gemini answer for the 20 test stocks: a summary of each top mover's (made-up) latest news
+CANNED_INSIGHT = """Today's biggest movers (canned test insight - summaries of made-up news)
 
 Top gainers
-- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
-  Article: "Uber Takes Robotaxis Nationwide" - https://news.example.com/2026/10/uber-robotaxi-expansion
-- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] A new data center chip order from several cloud providers lifted the stock.
-  Article: "Cloud Giants Line Up for NVIDIA's Next Chip" - https://news.example.com/2026/10/nvidia-data-center-orders
-- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Strong cloud and ad revenue in its quarterly report beat expectations.
-  Article: "Alphabet Earnings Beat on Cloud Growth" - https://news.example.com/2026/10/alphabet-earnings-beat
+- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Uber is expanding its robotaxi service to ten more cities.
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] Several cloud providers are lining up to buy NVIDIA's next chip.
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Alphabet's earnings beat expectations on cloud growth.
 
 Top losers
-- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Reports of weaker phone demand and a delayed product launch weighed on the stock.
-  Article: "Apple Delays Launch Amid Soft Demand" - https://news.example.com/2026/10/apple-launch-delay
-- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Quarterly deliveries came in well below analyst forecasts.
-  Article: "Tesla Deliveries Miss Estimates" - https://news.example.com/2026/10/tesla-deliveries-miss
-- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel cut its full-year outlook, citing slower PC sales.
-  Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
+- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Apple delayed a product launch amid soft demand.
+- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Tesla's deliveries missed estimates.
+- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel lowered its guidance because of a PC slump.
 """
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
 XLSX_HEADER = ("Stock Name", "Ticker", "Market", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference")
@@ -213,6 +224,26 @@ class FakeGenAI:
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
+class FakeGoogleNews:
+    '''
+    Stands in for the analyzer's urlopen: answers Google News RSS searches with CANNED_NEWS (one article
+    per ticker, for today), recording each search.
+    '''
+
+    def __init__(self):
+        self.queries = []
+
+    def __call__(self, request, timeout=None):
+        query = unquote_plus(request.full_url.split("q=")[1].split("&")[0])
+        self.queries.append(query)
+        news = CANNED_NEWS.get(query.split()[0])
+        item = "" if not news else (
+            "<item><title>{0} - {1}</title><link>{2}</link><pubDate>Wed, 28 Oct 2026 14:00:00 GMT</pubDate>"
+            "<source url=\"https://example.com\">{1}</source></item>").format(
+                html.escape(news[0]), html.escape(news[1]), html.escape(news[2]))
+        return io.BytesIO('<?xml version="1.0"?><rss><channel>{}</channel></rss>'.format(item).encode())
+
+
 class FakeYagmail:
     '''
     Stands in for yagmail, recording each email (and its xlsx attachments' sheets) instead of sending it.
@@ -300,6 +331,10 @@ def harness(monkeypatch, request):
         if GEMINI_KEY and not genai.fail:
             time.sleep(seconds)
     monkeypatch.setattr(sys.modules["analyzer"], "sleep", record_wait)
+    # canned latest news, unless asked to use the real Google News
+    google_news = FakeGoogleNews()
+    if not LIVE_NEWS:
+        monkeypatch.setattr(sys.modules["analyzer"], "urlopen", google_news)
     config = {
         "maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"},
         "google_gemini_config": {"my_key": "test-gemini-key"},
@@ -311,7 +346,8 @@ def harness(monkeypatch, request):
     distributor.set_stomp_connection(stomp_connection)
 
     harness = types.SimpleNamespace(distributor=distributor, db=sqlite_connection, genai=genai, yag=yag,
-                                    stomp=stomp_connection, out_dir=out_dir, config=config, waits=waits)
+                                    stomp=stomp_connection, out_dir=out_dir, config=config, waits=waits,
+                                    google_news=google_news)
     yield harness
 
     logging.getLogger().removeHandler(module.Distributor.handler)
@@ -405,8 +441,11 @@ def test_distribution_sends_report(harness):
     gainers, losers = question.split("Top losers:")
     assert all(name in gainers for name in ["Uber Technologies Inc", "NVIDIA Corp", "Alphabet Inc Class A"])
     assert all(name in losers for name in ["Apple Inc", "Tesla Inc", "Intel Corp"])
-    # only the top three of each are asked about
+    # only the top three of each are asked about, each with its latest news
     assert "Salesforce" not in question and "JPMorgan" not in question
+    if not LIVE_NEWS:
+        assert [query.split()[0] for query in harness.google_news.queries] == ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]
+        assert all('Latest news: "{}" ({},'.format(title, source) in question for (title, source, _) in CANNED_NEWS.values())
 
     assert len(harness.yag.sent) == 1
     assert email["to"] == USERS
@@ -419,8 +458,10 @@ def test_distribution_sends_report(harness):
     positions = [body.index("<b>{}</b>".format(ticker)) for ticker in ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]]
     assert positions == sorted(positions)
     assert "Salesforce" not in body and "All 20 stocks are in the attached spreadsheet." in body
-    if not GEMINI_KEY:
-        assert '<a href="https://news.example.com/2026/10/uber-robotaxi-expansion">Uber Takes Robotaxis Nationwide</a>' in body
+    if not LIVE_NEWS:
+        assert '<a href="https://news.example.com/2026/10/uber-robotaxi-expansion">Uber Takes Robotaxis to Ten More Cities</a>' in body
+    if not GEMINI_KEY and not LIVE_NEWS:
+        assert "<b>Latest UBER news:</b> Uber is expanding its robotaxi service to ten more cities." in body
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"][:len(expected_rows)] == expected_rows
     # the Dashboard summarises the day and lists the top gainers and losers (rows 8-13)
@@ -434,8 +475,9 @@ def test_distribution_sends_report(harness):
     if not GEMINI_KEY:
         assert [row[3] for row in table] == ["Product / orders", "Product / orders", "Earnings / results",
                                              "Product / orders", "Earnings / results", "Guidance / outlook"]
-        assert table[0][4] == "Shares jumped after Uber announced its robotaxi service is expanding to ten more cities."
-        assert table[0][5] == "Uber Takes Robotaxis Nationwide"
+        assert table[0][4] == "Uber is expanding its robotaxi service to ten more cities."
+    if not LIVE_NEWS:
+        assert table[0][5] == "Uber Takes Robotaxis to Ten More Cities (Example News)"
     assert_finished(harness)
 
 
@@ -465,9 +507,9 @@ def test_distribution_still_emails_when_ai_fails(harness):
     # still has the Dashboard, with a note that the AI's insight is missing
     assert len(harness.genai.questions) == 4 and harness.waits == [30, 60, 90]
     assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
-    assert "No article found for this stock." in email["contents"]
+    assert "No summary available." in email["contents"]
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"][:2] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
-    # without the AI's answer the Dashboard still lists the gainer, just without details
-    assert sheets["Dashboard"][7] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—", "No article found for this stock.", "—")
+    # without the AI's answer the Dashboard still lists the gainer and its news link, just without a summary
+    assert sheets["Dashboard"][7][:5] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—", "No summary available.")
     assert_finished(harness)

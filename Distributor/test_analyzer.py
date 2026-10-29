@@ -7,9 +7,12 @@
 # Run from the Distributor directory:
 #   python3 -m pytest test_analyzer.py
 import datetime
+import html
+import io
 import os
 import sys
 import types
+from urllib.parse import unquote_plus
 
 import openpyxl
 import pytest
@@ -51,24 +54,30 @@ STOCKS = [
     (19, "JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0),          # -8%
     (20, "Walmart Inc", "WMT:NYSE", 100.0, 104.0),                  # +4%
 ]
-# A canned Gemini answer for the 20 test stocks. The articles and links are made up (example.com), not real news.
-CANNED_INSIGHT = """Today's biggest movers (canned test insight - these articles are made up)
+# Canned latest news for the top movers, as Google News would give it: ticker -> (headline, source, link).
+# The headlines and links are made up (news.example.com), not real news.
+CANNED_NEWS = {
+    "UBER": ("Uber Takes Robotaxis to Ten More Cities", "Example News", "https://news.example.com/2026/10/uber-robotaxi-expansion"),
+    "NVDA": ("Cloud Giants Line Up for NVIDIA's Next Chip", "Example Wire", "https://news.example.com/2026/10/nvidia-data-center-orders"),
+    "GOOGL": ("Alphabet Earnings Beat on Cloud Growth", "Example News", "https://news.example.com/2026/10/alphabet-earnings-beat"),
+    "AAPL": ("Apple Delays Launch Amid Soft Demand", "Example Wire", "https://news.example.com/2026/10/apple-launch-delay"),
+    "TSLA": ("Tesla Deliveries Miss Estimates", "Example News", "https://news.example.com/2026/10/tesla-deliveries-miss"),
+    "INTC": ("Intel Lowers Guidance on PC Slump", "Example Wire", "https://news.example.com/2026/10/intel-guidance-cut"),
+}
+NEWS_DATE = "Wed, 28 Oct 2026 14:00:00 GMT"
+
+# A canned Gemini answer for the 20 test stocks: a summary of each top mover's (made-up) latest news
+CANNED_INSIGHT = """Today's biggest movers (canned test insight - summaries of made-up news)
 
 Top gainers
-- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.
-  Article: "Uber Takes Robotaxis Nationwide" - https://news.example.com/2026/10/uber-robotaxi-expansion
-- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] A new data center chip order from several cloud providers lifted the stock.
-  Article: "Cloud Giants Line Up for NVIDIA's Next Chip" - https://news.example.com/2026/10/nvidia-data-center-orders
-- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Strong cloud and ad revenue in its quarterly report beat expectations.
-  Article: "Alphabet Earnings Beat on Cloud Growth" - https://news.example.com/2026/10/alphabet-earnings-beat
+- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Uber is expanding its robotaxi service to ten more cities.
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] Several cloud providers are lining up to buy NVIDIA's next chip.
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Alphabet's earnings beat expectations on cloud growth.
 
 Top losers
-- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Reports of weaker phone demand and a delayed product launch weighed on the stock.
-  Article: "Apple Delays Launch Amid Soft Demand" - https://news.example.com/2026/10/apple-launch-delay
-- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Quarterly deliveries came in well below analyst forecasts.
-  Article: "Tesla Deliveries Miss Estimates" - https://news.example.com/2026/10/tesla-deliveries-miss
-- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel cut its full-year outlook, citing slower PC sales.
-  Article: "Intel Lowers Guidance on PC Slump" - https://news.example.com/2026/10/intel-guidance-cut
+- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Apple delayed a product launch amid soft demand.
+- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Tesla's deliveries missed estimates.
+- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel lowered its guidance because of a PC slump.
 """
 
 STOCK_NAMES = {stock_id: (name, acronym) for (stock_id, name, acronym, _, _) in STOCKS}
@@ -85,26 +94,19 @@ XLSX_ORDER = ["ADBE:NASDAQ", "AMD:NASDAQ", "GOOGL:NASDAQ", "AMZN:NASDAQ", "AAPL:
 
 COW_FACE, BEAR_FACE = "\U0001F42E", "\U0001F43B"
 
-# The Dashboard's gainers/losers table for CANNED_INSIGHT: (side, ticker, move, driver, what happened, source, link)
+# The Dashboard's gainers/losers table for CANNED_NEWS and CANNED_INSIGHT:
+# (side, ticker, move, topic, latest news summary, source, link)
 EXPECTED_DASHBOARD = [
-    (COW_FACE + " Gainer", "UBER", 0.2, "Product / orders",
-     "Shares jumped after Uber announced its robotaxi service is expanding to ten more cities.",
-     "Uber Takes Robotaxis Nationwide", "https://news.example.com/2026/10/uber-robotaxi-expansion"),
-    (COW_FACE + " Gainer", "NVDA", 0.15, "Product / orders",
-     "A new data center chip order from several cloud providers lifted the stock.",
-     "Cloud Giants Line Up for NVIDIA's Next Chip", "https://news.example.com/2026/10/nvidia-data-center-orders"),
-    (COW_FACE + " Gainer", "GOOGL", 0.1, "Earnings / results",
-     "Strong cloud and ad revenue in its quarterly report beat expectations.",
-     "Alphabet Earnings Beat on Cloud Growth", "https://news.example.com/2026/10/alphabet-earnings-beat"),
-    (BEAR_FACE + " Loser", "AAPL", -0.25, "Product / orders",
-     "Reports of weaker phone demand and a delayed product launch weighed on the stock.",
-     "Apple Delays Launch Amid Soft Demand", "https://news.example.com/2026/10/apple-launch-delay"),
-    (BEAR_FACE + " Loser", "TSLA", -0.2, "Earnings / results",
-     "Quarterly deliveries came in well below analyst forecasts.",
-     "Tesla Deliveries Miss Estimates", "https://news.example.com/2026/10/tesla-deliveries-miss"),
-    (BEAR_FACE + " Loser", "INTC", -0.1, "Guidance / outlook",
-     "Intel cut its full-year outlook, citing slower PC sales.",
-     "Intel Lowers Guidance on PC Slump", "https://news.example.com/2026/10/intel-guidance-cut"),
+    (side, ticker, move, topic, summary, "{} ({})".format(CANNED_NEWS[ticker][0], CANNED_NEWS[ticker][1]),
+     CANNED_NEWS[ticker][2])
+    for (side, ticker, move, topic, summary) in [
+        (COW_FACE + " Gainer", "UBER", 0.2, "Product / orders", "Uber is expanding its robotaxi service to ten more cities."),
+        (COW_FACE + " Gainer", "NVDA", 0.15, "Product / orders", "Several cloud providers are lining up to buy NVIDIA's next chip."),
+        (COW_FACE + " Gainer", "GOOGL", 0.1, "Earnings / results", "Alphabet's earnings beat expectations on cloud growth."),
+        (BEAR_FACE + " Loser", "AAPL", -0.25, "Product / orders", "Apple delayed a product launch amid soft demand."),
+        (BEAR_FACE + " Loser", "TSLA", -0.2, "Earnings / results", "Tesla's deliveries missed estimates."),
+        (BEAR_FACE + " Loser", "INTC", -0.1, "Guidance / outlook", "Intel lowered its guidance because of a PC slump."),
+    ]
 ]
 
 # Newest pull first, as the distributor's query returns it: today's pull then yesterday's
@@ -155,6 +157,62 @@ class FakeGenAI:
         return Model()
 
 
+def rss(items):
+    '''
+    A Google News RSS feed with these (headline, source, link) items; like Google News, each title ends in " - Source".
+    '''
+    entries = "".join("<item><title>{} - {}</title><link>{}</link><pubDate>{}</pubDate>"
+                      "<source url=\"https://example.com\">{}</source></item>".format(
+                          html.escape(title), html.escape(source), html.escape(link), NEWS_DATE, html.escape(source))
+                      for (title, source, link) in items)
+    return '<?xml version="1.0"?><rss version="2.0"><channel><title>Google News</title>{}</channel></rss>'.format(entries)
+
+
+class FakeGoogleNews:
+    '''
+    Stands in for urlopen: answers Google News RSS searches from `today` (searches for today's news) and
+    `any_time` (searches for any news), both ticker -> list of (headline, source, link), recording each request;
+    fail=True makes every request raise.
+    '''
+
+    def __init__(self, today=None, any_time=None, fail=False):
+        self.today = today if today is not None else {ticker: [news] for ticker, news in CANNED_NEWS.items()}
+        self.any_time = any_time or {}
+        self.fail = fail
+        self.requests = []
+
+    def __call__(self, request, timeout=None):
+        self.requests.append(request)
+        if self.fail:
+            raise OSError("Google News made to fail by the test")
+        query = unquote_plus(request.full_url.split("q=")[1].split("&")[0])
+        ticker = query.split()[0]
+        items = self.today.get(ticker, []) if "when:1d" in query else self.any_time.get(ticker, [])
+        return io.BytesIO(rss(items).encode())
+
+    def queries(self):
+        return [unquote_plus(request.full_url.split("q=")[1].split("&")[0]) for request in self.requests]
+
+
+def news_for(ticker):
+    '''
+    The latest news fetch_latest_news should find for a ticker in CANNED_NEWS.
+    '''
+    title, source, url = CANNED_NEWS[ticker]
+    return {"title": title, "url": url, "source": source, "published": NEWS_DATE}
+
+
+def sorted_with_news():
+    '''
+    All the test stocks, sorted, with each top mover's latest news added (as run_analyze does).
+    '''
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+    gainers, losers = analyzer.top_movers(sorted_data)
+    for f in gainers + losers:
+        f["news"] = news_for(analyzer.ticker_and_market(f)[0])
+    return sorted_data
+
+
 def finding(stock_id, with_names=True):
     '''
     The finding format_findings should produce for a stock in STOCKS (with names, as run_analyze adds them).
@@ -174,15 +232,18 @@ def xlsx_row(acronym):
 def test_run_analyze(monkeypatch, tmp_path):
     fake_genai = FakeGenAI(CANNED_INSIGHT)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
+    google_news = FakeGoogleNews()
+    monkeypatch.setattr(analyzer, "urlopen", google_news)
     xlsx_location = str(tmp_path / "report.xlsx")
     config = {"email_config": {"attachment": xlsx_location}}
 
     blurb = analyzer.run_analyze(MARIADB_DATA, FakeCursor(), config)
 
+    # the latest news is looked up for just the six top movers, and Gemini is asked about it
+    assert [query.split()[0] for query in google_news.queries()] == ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]
+    assert len(fake_genai.questions) == 1 and 'Latest news: "Uber Takes Robotaxis to Ten More Cities"' in fake_genai.questions[0]
     # the email body is the Dashboard as HTML
-    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
-    assert blurb == analyzer.develop_email(sorted_data, CANNED_INSIGHT)
-    assert len(fake_genai.questions) == 1
+    assert blurb == analyzer.develop_email(sorted_with_news(), CANNED_INSIGHT)
     workbook = openpyxl.load_workbook(xlsx_location)
     rows = list(workbook["Stock Data"].iter_rows(values_only=True))[:len(STOCKS) + 1]
     assert rows == [tuple(analyzer.XLSX_HEADER)] + [xlsx_row(acronym) for acronym in XLSX_ORDER]
@@ -220,17 +281,54 @@ def test_top_movers():
     assert analyzer.top_movers([finding(1), finding(3)]) == ([finding(1)], [])
 
 
+def test_fetch_latest_news(monkeypatch):
+    google_news = FakeGoogleNews()
+    monkeypatch.setattr(analyzer, "urlopen", google_news)
+
+    # today's top Google News result, with " - Source" taken off the headline
+    assert analyzer.fetch_latest_news(finding(16)) == news_for("UBER")
+    assert google_news.queries() == ["UBER stock when:1d"]
+    assert google_news.requests[0].full_url.startswith("https://news.google.com/rss/search?q=UBER+stock+when%3A1d&")
+    assert google_news.requests[0].get_header("User-agent")
+
+    # only the first (top) result is used
+    google_news = FakeGoogleNews(today={"UBER": [CANNED_NEWS["UBER"], CANNED_NEWS["NVDA"]]})
+    monkeypatch.setattr(analyzer, "urlopen", google_news)
+    assert analyzer.fetch_latest_news(finding(16)) == news_for("UBER")
+
+    # with no news today, the latest news from any time is used
+    google_news = FakeGoogleNews(today={}, any_time={"UBER": [CANNED_NEWS["UBER"]]})
+    monkeypatch.setattr(analyzer, "urlopen", google_news)
+    assert analyzer.fetch_latest_news(finding(16)) == news_for("UBER")
+    assert google_news.queries() == ["UBER stock when:1d", "UBER stock"]
+
+    # no news at all, or Google News can't be reached: None
+    monkeypatch.setattr(analyzer, "urlopen", FakeGoogleNews(today={}))
+    assert analyzer.fetch_latest_news(finding(16)) is None
+    monkeypatch.setattr(analyzer, "urlopen", FakeGoogleNews(fail=True))
+    assert analyzer.fetch_latest_news(finding(16)) is None
+
+    # a stock without an acronym is searched by name
+    google_news = FakeGoogleNews(today={})
+    monkeypatch.setattr(analyzer, "urlopen", google_news)
+    analyzer.fetch_latest_news(dict(finding(1), acronym=None))
+    assert google_news.queries()[0] == "Alphabet Inc Class A stock when:1d"
+
+
 def test_get_insight(monkeypatch):
     fake_genai = FakeGenAI(CANNED_INSIGHT)
     monkeypatch.setattr(analyzer, "genai", fake_genai)
-    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+    sorted_data = sorted_with_news()
 
     blurb = analyzer.get_insight(sorted_data)
 
     assert blurb == CANNED_INSIGHT
     question = fake_genai.questions[0]
     assert 'a line saying only "Top gainers"' in question and 'a line saying only "Top losers"' in question
-    assert "[Driver]" in question and "Earnings / results" in question
+    assert "[Topic]" in question and "Earnings / results" in question
+    # Gemini summarizes each stock's latest news, without saying it's why the stock moved
+    assert "based only on the" in question and "may not be why the stock moved" in question
+    assert '  Latest news: "Uber Takes Robotaxis to Ten More Cities" (Example News, {})'.format(NEWS_DATE) in question
     gainers, losers = question.split("\nTop losers:")
     assert "Uber Technologies Inc (UBER:NYSE): 70.0 -> 84.0 (+20.00%)" in gainers
     assert "NVIDIA Corp (NVDA:NASDAQ): 120.0 -> 138.0 (+15.00%)" in gainers
@@ -244,6 +342,12 @@ def test_get_insight(monkeypatch):
     assert "Microsoft" not in question
     # Gemini 3.8 Flash is asked first, and gets up to 10 minutes to answer
     assert fake_genai.models == ["gemini-3.8-flash"] and fake_genai.request_options == [{"timeout": 600}]
+
+    # a stock without news is still asked about, saying none was found
+    fake_genai = FakeGenAI(CANNED_INSIGHT)
+    monkeypatch.setattr(analyzer, "genai", fake_genai)
+    analyzer.get_insight(analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS]))
+    assert fake_genai.questions[0].count("  Latest news: none found") == 6
 
     # if a model fails (like a 503 high demand), the next one is asked after waiting (recorded here, not really waited)...
     waits = []
@@ -265,12 +369,12 @@ def test_parse_insight():
     details = analyzer.parse_insight(CANNED_INSIGHT)
 
     assert list(details) == ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]
-    for (_, ticker, _, driver, what_happened, article, url) in EXPECTED_DASHBOARD:
-        assert details[ticker] == {"driver": driver, "what_happened": what_happened, "article": article, "url": url}
+    for (_, ticker, _, topic, summary, _, _) in EXPECTED_DASHBOARD:
+        assert details[ticker] == {"topic": topic, "summary": summary}
 
-    # markdown is ignored, and a stock without a driver or article still gets what happened
+    # markdown is ignored, and a stock without a topic still gets its summary
     assert analyzer.parse_insight("* **Tesla Inc (TSLA:NASDAQ) -20.00%:** Deliveries missed.") == \
-        {"TSLA": {"driver": None, "what_happened": "Deliveries missed.", "article": None, "url": None}}
+        {"TSLA": {"topic": None, "summary": "Deliveries missed."}}
     assert analyzer.parse_insight(analyzer.AI_ERROR_ANSWER) == {}
 
 
@@ -299,7 +403,7 @@ def test_summarize_day():
 
 
 def test_develop_email():
-    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+    sorted_data = sorted_with_news()
 
     body = analyzer.develop_email(sorted_data, CANNED_INSIGHT)
 
@@ -310,21 +414,27 @@ def test_develop_email():
     assert "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%" in body
     assert "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%" in body
     assert body.index(COW_FACE + " Top gainers") < body.index(BEAR_FACE + " Top losers")
-    # each mover in order, with its move, driver, what happened and article link (& and ' are escaped)
+    # each mover in order, with its move, topic, latest news summary, and a link to that news (& and ' are escaped)
     positions = []
-    for (_, ticker, move, driver, what_happened, article, url) in EXPECTED_DASHBOARD:
+    for (_, ticker, move, topic, summary, _, url) in EXPECTED_DASHBOARD:
         positions.append(body.index("<b>{}</b>".format(ticker)))
-        assert analyzer.describe_move(move) in body
-        assert driver in body and what_happened in body
-        assert '<a href="{}">{}</a>'.format(url, article.replace("'", "&#x27;")) in body
+        assert analyzer.describe_move(move) in body and topic in body
+        assert "<b>Latest {} news:</b> {}".format(ticker, html.escape(summary)) in body
+        title, source, _ = CANNED_NEWS[ticker]
+        assert '<a href="{}">{}</a><span style="color:#52514E;"> · {}</span>'.format(url, html.escape(title), source) in body
     assert positions == sorted(positions)
     assert "Salesforce" not in body and "All 20 stocks are in the attached spreadsheet." in body
     assert analyzer.AI_ERROR_ANSWER not in body
 
-    # if the AI failed, the movers are still listed, with a note
+    # if the AI failed, the movers and their news links are still listed, with a note
     body = analyzer.develop_email(sorted_data, analyzer.AI_ERROR_ANSWER)
-    assert analyzer.AI_ERROR_ANSWER in body and "<b>UBER</b>" in body and "No article found for this stock." in body
-    assert "<a href" not in body
+    assert analyzer.AI_ERROR_ANSWER in body and "<b>UBER</b>" in body
+    assert body.count("No summary available.") == 6 and body.count("<a href") == 6
+
+    # a stock without news says so, with no link
+    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+    body = analyzer.develop_email(sorted_data, CANNED_INSIGHT)
+    assert body.count("No recent news found.") == 6 and "<a href" not in body and "Latest UBER news" not in body
 
 
 def test_shade_for_rate():
@@ -343,7 +453,7 @@ def test_shade_for_rate():
 
 def test_develop_xlsx(tmp_path):
     xlsx_location = str(tmp_path / "report.xlsx")
-    sorted_data = analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS])
+    sorted_data = sorted_with_news()
 
     analyzer.develop_xlsx(sorted_data, CANNED_INSIGHT, xlsx_location)
 
@@ -357,8 +467,8 @@ def test_develop_xlsx(tmp_path):
     assert dashboard["A3"].value == "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%"
     assert dashboard["A4"].value == "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%"
 
-    # ---- Dashboard: the gainers/losers table, with links to the articles
-    assert [cell.value for cell in dashboard[7]] == ["Side", "Ticker", "Move", "Driver", "What happened", "Source"]
+    # ---- Dashboard: the gainers/losers table, with each one's latest news and a link to it
+    assert [cell.value for cell in dashboard[7]] == ["Side", "Ticker", "Move", "Topic", "Latest news", "Source"]
     assert all(cell.font.bold for cell in dashboard[7])
     for row, expected in enumerate(EXPECTED_DASHBOARD, start=8):
         cells = dashboard[row]
@@ -391,8 +501,16 @@ def test_develop_xlsx(tmp_path):
     apple_row = XLSX_ORDER.index("AAPL:NASDAQ") + 2
     assert data_sheet.cell(row=apple_row, column=7).fill.start_color.rgb[-6:] == "B3261E"
 
-    # if the AI failed, the table still lists the movers, without details
+    # if the AI failed, the table still lists the movers and their news links, without summaries
     analyzer.develop_xlsx(sorted_data, analyzer.AI_ERROR_ANSWER, xlsx_location)
     dashboard = openpyxl.load_workbook(xlsx_location)["Dashboard"]
-    assert [cell.value for cell in dashboard[8]] == [COW_FACE + " Gainer", "UBER", 0.2, "—",
-                                                     "No article found for this stock.", "—"]
+    assert [cell.value for cell in dashboard[8]] == [COW_FACE + " Gainer", "UBER", 0.2, "—", "No summary available.",
+                                                     "Uber Takes Robotaxis to Ten More Cities (Example News)"]
+    assert dashboard[8][5].hyperlink.target == CANNED_NEWS["UBER"][2]
+
+    # a stock without news says so, with no link
+    analyzer.develop_xlsx(analyzer.sort_findings([finding(stock_id) for (stock_id, _, _, _, _) in STOCKS]),
+                          CANNED_INSIGHT, xlsx_location)
+    dashboard = openpyxl.load_workbook(xlsx_location)["Dashboard"]
+    assert [cell.value for cell in dashboard[8]][3:] == ["Product / orders", "No recent news found.", "—"]
+    assert dashboard[8][5].hyperlink is None

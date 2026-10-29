@@ -11,6 +11,9 @@ from openpyxl.worksheet.properties import PageSetupProperties
 import re
 from time import sleep
 import traceback
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ElementTree
 
 # Config keys
 EMAIL_CONFIG = "email_config"
@@ -34,14 +37,18 @@ TOP_COUNT = 3
 AI_TIMEOUT_SECONDS = 600
 GAINERS_HEADLINE = "Top gainers"
 LOSERS_HEADLINE = "Top losers"
-DRIVERS = ["Earnings / results", "Product / orders", "Guidance / outlook", "Analyst rating", "Macro / sector",
-           "Legal / regulatory", "Other"]
+TOPICS = ["Earnings / results", "Product / orders", "Guidance / outlook", "Analyst rating", "Macro / sector",
+          "Legal / regulatory", "Other"]
 
 # How each stock appears in the AI's answer, so the Dashboard can pick it apart:
-#   - Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] What happened.
-#     Article: "Article title" - https://...
+#   - Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] A summary of its latest news.
 STOCK_LINE = re.compile(r"^\s*[-•*]\s*.*?\(([A-Za-z0-9.\-]+)(?::[A-Za-z]+)?\)[^:]*:\s*(?:\[([^\]]+)\]\s*)?(.+?)\s*$")
-ARTICLE_LINE = re.compile(r"^\s*Article:\s*\"?(.+?)\"?\s+[-–—]\s+(https?://\S+)\s*$")
+
+# Latest news: the top Google News result for each top mover, from its RSS feed (no key needed). It is the
+# stock's latest news, which may not be why the stock moved. Today's news is tried first, then any.
+NEWS_RSS_URL = "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en"
+NEWS_QUERIES = ["{} stock when:1d", "{} stock"]
+NEWS_TIMEOUT_SECONDS = 15
 
 # xlsx layout
 DASHBOARD_SHEET_TITLE = "Dashboard"
@@ -49,7 +56,7 @@ DATA_SHEET_TITLE = "Stock Data"
 REPORT_TITLE = "End-of-day watchlist report"
 XLSX_HEADER = ["Stock Name", "Ticker", "Market", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference"]
 DATA_COLUMN_WIDTHS = [38, 10, 10, 18, 16, 18, 20]
-DASHBOARD_HEADER = ["Side", "Ticker", "Move", "Driver", "What happened", "Source"]
+DASHBOARD_HEADER = ["Side", "Ticker", "Move", "Topic", "Latest news", "Source"]
 DASHBOARD_COLUMN_WIDTHS = [12, 9, 12, 22, 82, 44]
 DASHBOARD_HEADER_ROW = 7
 HEADER_NOTES = {
@@ -63,7 +70,8 @@ HEADER_NOTES = {
                           "so direction reads without relying on red vs. green.",
 }
 DATA_FOOTNOTE = "Hover any header for a definition."
-NO_ARTICLE = "No article found for this stock."
+NO_NEWS = "No recent news found."
+NO_SUMMARY = "No summary available."
 PLACEHOLDER = "—"
 
 # Number formats: dollars, signed dollars, and a ▲/▼ percent (no change shows a plain 0)
@@ -128,6 +136,11 @@ def run_analyze(mariadb_data, mariadb_cursor, config):
 
         # use sort_findings
         sorted_data = sort_findings(formatted_data)
+
+        # add each top gainer's and loser's latest news
+        gainers, losers = top_movers(sorted_data)
+        for finding in gainers + losers:
+            finding["news"] = fetch_latest_news(finding)
 
         # use get_insight
         blurb = get_insight(sorted_data)
@@ -216,10 +229,49 @@ def top_movers(sorted_data):
     return gainers, losers
 
 
+def fetch_latest_news(finding):
+    '''
+    Finds a stock's latest news: the top Google News result for it (today's if there is any).
+
+    Parameters:
+    -----------
+      finding: a stock's finding, with its acronym (or name)
+
+    Returns:
+    -----------
+      - {"title", "url", "source", "published"} for the top article, or None if nothing was found
+        (or Google News couldn't be reached). The url is a Google News link that opens the article.
+    '''
+    name = ticker_and_market(finding)[0] or finding["stock_name"]
+    if not name:
+        return None
+    for query in NEWS_QUERIES:
+        url = NEWS_RSS_URL.format(quote_plus(query.format(name)))
+        try:
+            request = Request(url, headers={"User-Agent": "Mozilla/5.0 (StockRate Distributor)"})
+            with urlopen(request, timeout=NEWS_TIMEOUT_SECONDS) as response:
+                item = ElementTree.fromstring(response.read()).find("./channel/item")
+        except Exception as e:
+            logger.error("Couldn't get the latest news for {}: {}".format(name, e))
+            return None
+        if item is None:
+            continue
+        title, link = (item.findtext("title") or "").strip(), (item.findtext("link") or "").strip()
+        source = (item.findtext("source") or "").strip()
+        # Google News titles end with " - Source"
+        if source and title.endswith(" - " + source):
+            title = title[:-len(" - " + source)]
+        if title and link:
+            return {"title": title, "url": link, "source": source or None,
+                    "published": (item.findtext("pubDate") or "").strip() or None}
+    return None
+
+
 def get_insight(sorted_data):
     '''
     Talks to an AI model about the current sorted data, specifically asking for insight on the top three gainers
-    and losers, finding a recent article on each of the gainers and losers and providing a blurb on them.
+    and losers: a short summary of each one's latest news (from fetch_latest_news, set by run_analyze as
+    finding["news"]), with a topic for it.
 
     Parameters:
     -----------
@@ -232,19 +284,28 @@ def get_insight(sorted_data):
     gainers, losers = top_movers(sorted_data)
 
     def describe(findings):
-        return "\n".join("{} ({}): {} -> {} ({:+.2%})".format(finding["stock_name"], finding["acronym"],
-            finding["yesterday_price"], finding["today_price"], finding["rate_of_change"])
-            for finding in findings) or "None today"
+        lines = []
+        for finding in findings:
+            lines.append("{} ({}): {} -> {} ({:+.2%})".format(finding["stock_name"], finding["acronym"],
+                finding["yesterday_price"], finding["today_price"], finding["rate_of_change"]))
+            news = finding.get("news")
+            if news:
+                lines.append("  Latest news: \"{}\" ({}{})".format(news["title"], news["source"] or "unknown source",
+                    ", " + news["published"] if news["published"] else ""))
+            else:
+                lines.append("  Latest news: none found")
+        return "\n".join(lines) or "None today"
 
-    query = ("Here are today's top three gainers and top three losers among the stocks we track.\n"
-        "For each stock, please find a recent news article about it and write a short blurb on why it may have moved, "
-        "naming the article you used. Keep the whole answer short enough for an email.\n"
+    query = ("Here are today's top three gainers and top three losers among the stocks we track, each with the\n"
+        "headline of its latest news from Google News.\n"
+        "For each stock, write one or two sentences summarizing what its latest news is about, based only on the\n"
+        "headline given; don't add details that aren't in it. The news may not be why the stock moved, so don't\n"
+        "say that it is. If a stock has no news, write \"{}\" for it. Keep the whole answer short enough for an email.\n"
         "Start the gainers section with a line saying only \"{}\" and the losers section with a line saying only \"{}\".\n"
-        "Write each stock as exactly these two lines, in plain text:\n"
-        "- Stock Name (TICKER:MARKET) +1.23%: [Driver] One or two sentences on what happened.\n"
-        "  Article: \"Article title\" - https://link.to/the/article\n"
-        "where Driver is one of: {}.\n\n"
-        "Top gainers:\n{}\n\nTop losers:\n{}\n").format(GAINERS_HEADLINE, LOSERS_HEADLINE, ", ".join(DRIVERS),
+        "Write each stock as exactly one line, in plain text:\n"
+        "- Stock Name (TICKER:MARKET) +1.23%: [Topic] One or two sentences about its latest news.\n"
+        "where Topic is the news's topic, one of: {}.\n\n"
+        "Top gainers:\n{}\n\nTop losers:\n{}\n").format(NO_NEWS, GAINERS_HEADLINE, LOSERS_HEADLINE, ", ".join(TOPICS),
             describe(gainers), describe(losers))
 
     for attempt, model_name in enumerate(GEMINI_MODELS, start=1):
@@ -271,21 +332,14 @@ def parse_insight(blurb):
 
     Returns:
     -----------
-      - a dict of ticker (upper case) -> {"driver", "what_happened", "article", "url"}; anything the AI
-        left out is None, and stocks the AI didn't write about are missing
+      - a dict of ticker (upper case) -> {"topic", "summary"} (the summary of its latest news); a topic the
+        AI left out is None, and stocks the AI didn't write about are missing
     '''
     details = {}
-    current = None
     for line in blurb.splitlines():
-        line = line.replace("**", "").replace("`", "")
-        stock = STOCK_LINE.match(line)
+        stock = STOCK_LINE.match(line.replace("**", "").replace("`", ""))
         if stock:
-            current = {"driver": stock.group(2), "what_happened": stock.group(3), "article": None, "url": None}
-            details[stock.group(1).upper()] = current
-            continue
-        article = ARTICLE_LINE.match(line)
-        if article and current is not None:
-            current["article"], current["url"] = article.group(1), article.group(2)
+            details[stock.group(1).upper()] = {"topic": stock.group(2), "summary": stock.group(3)}
     return details
 
 
@@ -374,7 +428,7 @@ def develop_email(sorted_data, blurb):
     -----------
       - the email body as one line of HTML (yagmail turns line breaks into <br>, so there are none): the title
         and date, the summary of the day, the biggest gain and drop, then each top gainer and loser with its
-        move, driver, what happened and a link to the article
+        move, the topic and summary of its latest news, and a link to that news
     '''
     esc = html.escape
     mood_line, biggest_line = summarize_day(sorted_data)
@@ -404,15 +458,20 @@ def develop_email(sorted_data, blurb):
             parts.append('<div style="font-size:15px;"><b>{}</b> <span style="color:{};font-weight:bold;">{}</span>'
                          '<span style="color:#52514E;"> · {}</span></div>'.format(
                              esc(ticker), color, esc(describe_move(finding["rate_of_change"])),
-                             esc(detail.get("driver") or PLACEHOLDER)))
-            if detail.get("what_happened"):
-                parts.append('<div style="font-size:14px;margin-top:2px;">{}</div>'.format(esc(detail["what_happened"])))
+                             esc(detail.get("topic") or PLACEHOLDER)))
+            news = finding.get("news")
+            muted = '<div style="font-size:14px;margin-top:2px;font-style:italic;color:#52514E;">{}</div>'
+            if not news:
+                parts.append(muted.format(esc(NO_NEWS)))
             else:
-                parts.append('<div style="font-size:14px;margin-top:2px;font-style:italic;color:#52514E;">{}</div>'
-                             .format(esc(NO_ARTICLE)))
-            if detail.get("article") and detail.get("url"):
-                parts.append('<div style="font-size:13px;margin-top:2px;"><a href="{}">{}</a></div>'.format(
-                    esc(detail["url"], quote=True), esc(detail["article"])))
+                if detail.get("summary"):
+                    parts.append('<div style="font-size:14px;margin-top:2px;"><b>Latest {} news:</b> {}</div>'.format(
+                        esc(ticker), esc(detail["summary"])))
+                else:
+                    parts.append(muted.format(esc(NO_SUMMARY)))
+                parts.append('<div style="font-size:13px;margin-top:2px;"><a href="{}">{}</a>{}</div>'.format(
+                    esc(news["url"], quote=True), esc(news["title"]),
+                    '<span style="color:#52514E;"> · {}</span>'.format(esc(news["source"])) if news["source"] else ""))
             parts.append('</div>')
 
     parts.append('<div style="font-size:12px;color:#52514E;margin-top:18px;">All {} stocks are in the attached '
@@ -435,7 +494,7 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
     -----------
       - a file at the location of email_config -> attachment, with two sheets:
         "Dashboard": the title and date, a summary of the day, the biggest gain and drop, and a table of the
-          top gainers and losers with the driver, what happened and a linked source from the blurb
+          top gainers and losers with the topic and summary of its latest news (from the blurb) and a link to it
         "Stock Data": one row per stock in alphabetical order by market then name, with its acronym split
           into ticker and market, prices in dollars, and its percent difference marked ▲/▼ and shaded green
           or red (darker the bigger the move); the header row is frozen, filterable and has hover notes
@@ -482,18 +541,21 @@ def develop_xlsx(sorted_data, blurb, xlsx_location):
         move_cell = dashboard.cell(row=row, column=3, value=finding["rate_of_change"])
         move_cell.number_format = PERCENT_FORMAT
         move_cell.alignment = TOP
-        dashboard.cell(row=row, column=4, value=detail.get("driver") or PLACEHOLDER).alignment = TOP
+        dashboard.cell(row=row, column=4, value=detail.get("topic") or PLACEHOLDER).alignment = TOP
 
-        happened_cell = dashboard.cell(row=row, column=5, value=detail.get("what_happened") or NO_ARTICLE)
-        happened_cell.alignment = TOP_WRAP
-        if not detail.get("what_happened"):
-            happened_cell.font = MUTED_FONT
+        news = finding.get("news")
+        summary = detail.get("summary") if news else None
+        news_cell = dashboard.cell(row=row, column=5, value=summary or (NO_SUMMARY if news else NO_NEWS))
+        news_cell.alignment = TOP_WRAP
+        if not summary:
+            news_cell.font = MUTED_FONT
 
-        source_cell = dashboard.cell(row=row, column=6, value=detail.get("article") or PLACEHOLDER)
-        if detail.get("article") and detail.get("url"):
-            source_cell.hyperlink = detail["url"]
+        source_cell = dashboard.cell(row=row, column=6, value=PLACEHOLDER)
+        if news:
+            source_cell.value = "{} ({})".format(news["title"], news["source"]) if news["source"] else news["title"]
+            source_cell.hyperlink = news["url"]
             source_cell.style = "Hyperlink"
-        source_cell.alignment = TOP
+        source_cell.alignment = TOP_WRAP
 
     # ---- Stock Data: every stock, alphabetical by market then name
     data_sheet.append(XLSX_HEADER)
