@@ -9,6 +9,7 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.properties import PageSetupProperties
 import re
+import ssl
 from time import sleep
 import traceback
 from urllib.parse import quote_plus
@@ -49,6 +50,13 @@ STOCK_LINE = re.compile(r"^\s*[-•*]\s*.*?\(([A-Za-z0-9.\-]+)(?::[A-Za-z]+)?\)[
 NEWS_RSS_URL = "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en"
 NEWS_QUERIES = ["{} stock when:1d", "{} stock"]
 NEWS_TIMEOUT_SECONDS = 15
+# Check Google News's certificate with certifi's certificates when they're installed (they come with requests),
+# since some Pythons (like the python.org ones on macOS) can't find any certificates by themselves
+try:
+    import certifi
+    NEWS_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    NEWS_SSL_CONTEXT = ssl.create_default_context()
 
 # xlsx layout
 DASHBOARD_SHEET_TITLE = "Dashboard"
@@ -249,7 +257,7 @@ def fetch_latest_news(finding):
         url = NEWS_RSS_URL.format(quote_plus(query.format(name)))
         try:
             request = Request(url, headers={"User-Agent": "Mozilla/5.0 (StockRate Distributor)"})
-            with urlopen(request, timeout=NEWS_TIMEOUT_SECONDS) as response:
+            with urlopen(request, timeout=NEWS_TIMEOUT_SECONDS, context=NEWS_SSL_CONTEXT) as response:
                 item = ElementTree.fromstring(response.read()).find("./channel/item")
         except Exception as e:
             logger.error("Couldn't get the latest news for {}: {}".format(name, e))

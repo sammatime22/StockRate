@@ -180,9 +180,11 @@ class FakeGoogleNews:
         self.any_time = any_time or {}
         self.fail = fail
         self.requests = []
+        self.contexts = []
 
-    def __call__(self, request, timeout=None):
+    def __call__(self, request, timeout=None, context=None):
         self.requests.append(request)
+        self.contexts.append(context)
         if self.fail:
             raise OSError("Google News made to fail by the test")
         query = unquote_plus(request.full_url.split("q=")[1].split("&")[0])
@@ -290,6 +292,7 @@ def test_fetch_latest_news(monkeypatch):
     assert google_news.queries() == ["UBER stock when:1d"]
     assert google_news.requests[0].full_url.startswith("https://news.google.com/rss/search?q=UBER+stock+when%3A1d&")
     assert google_news.requests[0].get_header("User-agent")
+    assert google_news.contexts == [analyzer.NEWS_SSL_CONTEXT]
 
     # only the first (top) result is used
     google_news = FakeGoogleNews(today={"UBER": [CANNED_NEWS["UBER"], CANNED_NEWS["NVDA"]]})

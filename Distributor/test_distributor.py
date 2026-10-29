@@ -233,7 +233,7 @@ class FakeGoogleNews:
     def __init__(self):
         self.queries = []
 
-    def __call__(self, request, timeout=None):
+    def __call__(self, request, timeout=None, context=None):
         query = unquote_plus(request.full_url.split("q=")[1].split("&")[0])
         self.queries.append(query)
         news = CANNED_NEWS.get(query.split()[0])
@@ -475,6 +475,7 @@ def test_distribution_sends_report(harness):
     if not GEMINI_KEY:
         assert [row[3] for row in table] == ["Product / orders", "Product / orders", "Earnings / results",
                                              "Product / orders", "Earnings / results", "Guidance / outlook"]
+    if not GEMINI_KEY and not LIVE_NEWS:
         assert table[0][4] == "Uber is expanding its robotaxi service to ten more cities."
     if not LIVE_NEWS:
         assert table[0][5] == "Uber Takes Robotaxis to Ten More Cities (Example News)"
@@ -507,9 +508,12 @@ def test_distribution_still_emails_when_ai_fails(harness):
     # still has the Dashboard, with a note that the AI's insight is missing
     assert len(harness.genai.questions) == 4 and harness.waits == [30, 60, 90]
     assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
-    assert "No summary available." in email["contents"]
+    if not LIVE_NEWS:
+        assert "No summary available." in email["contents"]
     sheets = list(email["attachments"].values())[0]
     assert sheets["Stock Data"][:2] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
     # without the AI's answer the Dashboard still lists the gainer and its news link, just without a summary
-    assert sheets["Dashboard"][7][:5] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—", "No summary available.")
+    assert sheets["Dashboard"][7][:4] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—")
+    if not LIVE_NEWS:
+        assert sheets["Dashboard"][7][4] == "No summary available."
     assert_finished(harness)
