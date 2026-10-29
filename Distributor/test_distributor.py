@@ -2,47 +2,80 @@
 # sammatime22, 2026
 #
 # MariaDB is replaced by an in-memory SQLite database that runs the Distributor's real SQL,
-# STOMP and yagmail are replaced by recorders (no email is ever sent), and Gemini gives a
-# canned answer unless STOCKRATE_GEMINI_KEY is set. Each test writes to its own folder:
+# STOMP and yagmail are replaced by recorders (no email is ever sent), Gemini gives a canned answer
+# unless STOCKRATE_GEMINI_KEY is set, and Google News gives canned (made-up) headlines unless
+# STOCKRATE_LIVE_NEWS is set. Each test writes to its own folder:
 #
 #   test-output/<test name>/gemini_<n>.txt   the question asked of Gemini and its answer
 #   test-output/<test name>/email_<n>.txt    who the email would go to, subject, body and attachments
-#   test-output/<test name>/report.csv       the CSV attachment the Distributor wrote
+#   test-output/<test name>/email_<n>.html   the email body, to preview in a browser (try your phone's screen size)
+#   test-output/<test name>/report.xlsx      the xlsx attachment the Distributor wrote (open it in Excel/Numbers)
 #   test-output/<test name>/distributor.log  the Distributor's own log
 #   test-output/<test name>/stockrate.db     the SQLite database after the run (open it with `sqlite3 stockrate.db`)
 #
 # Setup on iSH (Alpine):
-#   apk add python3 py3-pytest py3-requests py3-yaml
+#   apk add python3 py3-pytest py3-requests py3-yaml py3-openpyxl
 #
 # Run from the Distributor directory:
 #   python3 -m pytest -s test_distributor.py
 #
 # Optional environment variables:
 #   STOCKRATE_GEMINI_KEY    ask the real Gemini (via its REST API) instead of using canned answers
-#   STOCKRATE_GEMINI_MODEL  model to ask when STOCKRATE_GEMINI_KEY is set (default: the one distributor.py uses)
+#   STOCKRATE_GEMINI_MODEL  model to ask when STOCKRATE_GEMINI_KEY is set (default: the ones distributor.py and analyzer.py use)
+#   STOCKRATE_LIVE_NEWS     set to 1 to get the top movers' latest news from the real Google News
 #   STOCKRATE_OUT           output directory (default: ./test-output)
 import asyncio
 import datetime
+import html
 import importlib
+import io
 import json
 import logging
 import os
 import re
 import sqlite3
 import sys
+import time
 import types
+from urllib.parse import unquote_plus
 
+import openpyxl
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 GEMINI_KEY = os.environ.get("STOCKRATE_GEMINI_KEY")
 GEMINI_MODEL = os.environ.get("STOCKRATE_GEMINI_MODEL")
+LIVE_NEWS = bool(os.environ.get("STOCKRATE_LIVE_NEWS"))
 OUT_DIR = os.path.abspath(os.environ.get("STOCKRATE_OUT", os.path.join(HERE, "test-output")))
 
 CANNED_AI_ANSWER = "Canned AI answer (set STOCKRATE_GEMINI_KEY to ask Gemini for real)."
+# Canned latest news for the top movers, as Google News would give it: ticker -> (headline, source, link).
+# The headlines and links are made up (news.example.com), not real news.
+CANNED_NEWS = {
+    "UBER": ("Uber Takes Robotaxis to Ten More Cities", "Example News", "https://news.example.com/2026/10/uber-robotaxi-expansion"),
+    "NVDA": ("Cloud Giants Line Up for NVIDIA's Next Chip", "Example Wire", "https://news.example.com/2026/10/nvidia-data-center-orders"),
+    "GOOGL": ("Alphabet Earnings Beat on Cloud Growth", "Example News", "https://news.example.com/2026/10/alphabet-earnings-beat"),
+    "AAPL": ("Apple Delays Launch Amid Soft Demand", "Example Wire", "https://news.example.com/2026/10/apple-launch-delay"),
+    "TSLA": ("Tesla Deliveries Miss Estimates", "Example News", "https://news.example.com/2026/10/tesla-deliveries-miss"),
+    "INTC": ("Intel Lowers Guidance on PC Slump", "Example Wire", "https://news.example.com/2026/10/intel-guidance-cut"),
+}
+
+# A canned Gemini answer for the 20 test stocks: a summary of each top mover's (made-up) latest news
+CANNED_INSIGHT = """Today's biggest movers (canned test insight - summaries of made-up news)
+
+Top gainers
+- Uber Technologies Inc (UBER:NYSE) +20.00%: [Product / orders] Uber is expanding its robotaxi service to ten more cities.
+- NVIDIA Corp (NVDA:NASDAQ) +15.00%: [Product / orders] Several cloud providers are lining up to buy NVIDIA's next chip.
+- Alphabet Inc Class A (GOOGL:NASDAQ) +10.00%: [Earnings / results] Alphabet's earnings beat expectations on cloud growth.
+
+Top losers
+- Apple Inc (AAPL:NASDAQ) -25.00%: [Product / orders] Apple delayed a product launch amid soft demand.
+- Tesla Inc (TSLA:NASDAQ) -20.00%: [Earnings / results] Tesla's deliveries missed estimates.
+- Intel Corp (INTC:NASDAQ) -10.00%: [Guidance / outlook] Intel lowered its guidance because of a PC slump.
+"""
 AI_ERROR_ANSWER = "An error occurred in querying the AI agent."
-CSV_HEADER = "Stock Name,Stock Acronym,Yesterday's Price,Today's Price,Total Difference,Percent Difference"
+XLSX_HEADER = ("Stock Name", "Ticker", "Market", "Yesterday's Price", "Today's Price", "Total Difference", "Percent Difference")
 
 SCHEMA = """
 CREATE TABLE STOCK (
@@ -64,11 +97,30 @@ CREATE TABLE USER (
 );
 """
 
-STOCKS = [
-    (1, "Alphabet Inc Class A", "GOOGL:NASDAQ"),
-    (2, "Apple Inc", "AAPL:NASDAQ"),
-    (3, "Microsoft Corp", "MSFT:NASDAQ"),
+# (stock_id, stock_name, acronym, yesterday's price, today's price); every rate of change is different
+PRICED_STOCKS = [
+    (1, "Alphabet Inc Class A", "GOOGL:NASDAQ", 100.0, 110.0),      # +10%
+    (2, "Apple Inc", "AAPL:NASDAQ", 200.0, 150.0),                  # -25%
+    (3, "Microsoft Corp", "MSFT:NASDAQ", 50.0, 50.0),               # 0%
+    (4, "Amazon.com Inc", "AMZN:NASDAQ", 180.0, 189.0),             # +5%
+    (5, "NVIDIA Corp", "NVDA:NASDAQ", 120.0, 138.0),                # +15%
+    (6, "Meta Platforms Inc", "META:NASDAQ", 500.0, 490.0),         # -2%
+    (7, "Tesla Inc", "TSLA:NASDAQ", 250.0, 200.0),                  # -20%
+    (8, "Netflix Inc", "NFLX:NASDAQ", 600.0, 612.0),                # +2%
+    (9, "Advanced Micro Devices Inc", "AMD:NASDAQ", 160.0, 164.0),  # +2.5%
+    (10, "Intel Corp", "INTC:NASDAQ", 30.0, 27.0),                  # -10%
+    (11, "International Business Machines Corp", "IBM:NYSE", 200.0, 207.0),  # +3.5%
+    (12, "Oracle Corp", "ORCL:NYSE", 140.0, 133.0),                 # -5%
+    (13, "Salesforce Inc", "CRM:NYSE", 300.0, 324.0),               # +8%
+    (14, "Adobe Inc", "ADBE:NASDAQ", 500.0, 470.0),                 # -6%
+    (15, "PayPal Holdings Inc", "PYPL:NASDAQ", 80.0, 79.0),         # -1.25%
+    (16, "Uber Technologies Inc", "UBER:NYSE", 70.0, 84.0),         # +20%
+    (17, "Walt Disney Co", "DIS:NYSE", 100.0, 97.0),                # -3%
+    (18, "Coca-Cola Co", "KO:NYSE", 200.0, 202.0),                  # +1%
+    (19, "JPMorgan Chase & Co", "JPM:NYSE", 150.0, 138.0),          # -8%
+    (20, "Walmart Inc", "WMT:NYSE", 100.0, 104.0),                  # +4%
 ]
+STOCKS = [(stock_id, name, acronym) for (stock_id, name, acronym, _, _) in PRICED_STOCKS]
 USERS = ["first@example.com", "second@example.com"]
 
 DB_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -127,7 +179,7 @@ class FakeGenAI:
         fake = self
 
         class Model:
-            def generate_content(self, query):
+            def generate_content(self, query, request_options=None):
                 return fake.answer(model_name, query)
 
         return Model()
@@ -138,7 +190,7 @@ class FakeGenAI:
         try:
             if self.fail:
                 raise RuntimeError("Gemini made to fail by the test")
-            text = self.ask_gemini(GEMINI_MODEL or model_name, query) if GEMINI_KEY else CANNED_AI_ANSWER
+            text = self.ask_gemini(GEMINI_MODEL or model_name, query) if GEMINI_KEY else self.canned_answer(query)
         except Exception as e:
             text = "<raised {!r}>".format(e)
             raise
@@ -148,20 +200,54 @@ class FakeGenAI:
         return types.SimpleNamespace(text=text)
 
     @staticmethod
+    def canned_answer(query):
+        # the analyzer's insight question gets the canned insight, anything else (like the apology) the plain answer
+        return CANNED_INSIGHT if "top three gainers" in query else CANNED_AI_ANSWER
+
+    @staticmethod
     def ask_gemini(model_name, query):
         import requests
+        # accept "gemini-2.5-flash" or "models/gemini-2.5-flash", and ignore stray spaces around the key
+        model_name = model_name[len("models/"):] if model_name.startswith("models/") else model_name
         resp = requests.post(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(model_name),
-            headers={"x-goog-api-key": GEMINI_KEY},
+            headers={"x-goog-api-key": GEMINI_KEY.strip()},
             json={"contents": [{"parts": [{"text": query}]}]},
-            timeout=60)
-        resp.raise_for_status()
+            timeout=600)  # same as analyzer.AI_TIMEOUT_SECONDS
+        if not resp.ok:
+            # show Google's own explanation (e.g. which model or key was rejected), not just the status code
+            try:
+                reason = resp.json()["error"]["message"]
+            except Exception:
+                reason = resp.text[:500]
+            raise RuntimeError("Gemini returned {} for model {}: {}".format(resp.status_code, model_name, reason))
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+class FakeGoogleNews:
+    '''
+    Stands in for the analyzer's urlopen: answers Google News RSS searches with CANNED_NEWS (one article
+    per ticker, for today), recording each search.
+    '''
+
+    def __init__(self):
+        self.queries = []
+
+    def __call__(self, request, timeout=None, context=None):
+        query = unquote_plus(request.full_url.split("q=")[1].split("&")[0])
+        self.queries.append(query)
+        news = CANNED_NEWS.get(query.split()[0])
+        item = "" if not news else (
+            "<item><title>{0} - {1}</title><link>{2}</link><pubDate>Wed, 28 Oct 2026 14:00:00 GMT</pubDate>"
+            "<source url=\"https://example.com\">{1}</source></item>").format(
+                html.escape(news[0]), html.escape(news[1]), html.escape(news[2]))
+        return io.BytesIO('<?xml version="1.0"?><rss><channel>{}</channel></rss>'.format(item).encode())
 
 
 class FakeYagmail:
     '''
-    Stands in for yagmail, recording each email (and its attachments' contents) instead of sending it.
+    Stands in for yagmail, recording each email (and its xlsx attachments' sheets) instead of sending it.
+    Each attachment is recorded as {sheet name: [row tuples]}.
     '''
 
     def __init__(self, out_dir):
@@ -177,14 +263,18 @@ class FakeYagmail:
             def send(self, to=None, subject=None, contents=None, attachments=None):
                 attached = {}
                 for path in attachments or []:
-                    with open(path) as attachment:
-                        attached[path] = attachment.read()
+                    workbook = openpyxl.load_workbook(path)
+                    attached[path] = {sheet.title: list(sheet.iter_rows(values_only=True)) for sheet in workbook}
                 email = {"from": user, "to": to, "subject": subject, "contents": contents, "attachments": attached}
                 fake.sent.append(email)
+                with open(os.path.join(fake.out_dir, "email_{}.html".format(len(fake.sent))), "w") as out:
+                    out.write('<meta charset="utf-8"><meta name="viewport" content="width=device-width">{}'.format(contents))
                 with open(os.path.join(fake.out_dir, "email_{}.txt".format(len(fake.sent))), "w") as out:
                     out.write("From: {}\nTo: {}\nSubject: {}\n\n{}\n".format(user, ", ".join(to or []), subject, contents))
-                    for path, content in attached.items():
-                        out.write("\n=== attachment {} ===\n{}".format(path, content))
+                    for path, sheets in attached.items():
+                        out.write("\n=== attachment {} ===\n".format(path))
+                        for title, rows in sheets.items():
+                            out.write("--- sheet {} ---\n{}\n".format(title, "\n".join(str(row) for row in rows)))
 
         return SMTP()
 
@@ -229,13 +319,26 @@ def harness(monkeypatch, request):
     for name, module in [("mariadb", fake_mariadb), ("stomp", fake_stomp), ("factory", fake_factory),
                          ("google", fake_google), ("google.generativeai", fake_genai), ("yagmail", fake_yagmail)]:
         monkeypatch.setitem(sys.modules, name, module)
+    # re-import analyzer too, so it picks up this test's fake Gemini
     monkeypatch.delitem(sys.modules, "distributor", raising=False)
+    monkeypatch.delitem(sys.modules, "analyzer", raising=False)
 
     module = importlib.import_module("distributor")
+    # record the analyzer's waits between AI retries; only really wait when asking the real Gemini
+    waits = []
+    def record_wait(seconds):
+        waits.append(seconds)
+        if GEMINI_KEY and not genai.fail:
+            time.sleep(seconds)
+    monkeypatch.setattr(sys.modules["analyzer"], "sleep", record_wait)
+    # canned latest news, unless asked to use the real Google News
+    google_news = FakeGoogleNews()
+    if not LIVE_NEWS:
+        monkeypatch.setattr(sys.modules["analyzer"], "urlopen", google_news)
     config = {
         "maria_db_config": {"user": "test", "password": "test", "host": "localhost", "port": 3306, "database": "stockrate"},
         "google_gemini_config": {"my_key": "test-gemini-key"},
-        "email_config": {"attachment": os.path.join(out_dir, "report.csv"), "email_address": "stockrate@example.com",
+        "email_config": {"attachment": os.path.join(out_dir, "report.xlsx"), "email_address": "stockrate@example.com",
                          "oauth2_file": "oauth2.json"},
     }
     distributor = module.Distributor(config)
@@ -243,7 +346,8 @@ def harness(monkeypatch, request):
     distributor.set_stomp_connection(stomp_connection)
 
     harness = types.SimpleNamespace(distributor=distributor, db=sqlite_connection, genai=genai, yag=yag,
-                                    stomp=stomp_connection, out_dir=out_dir, config=config)
+                                    stomp=stomp_connection, out_dir=out_dir, config=config, waits=waits,
+                                    google_news=google_news)
     yield harness
 
     logging.getLogger().removeHandler(module.Distributor.handler)
@@ -284,33 +388,97 @@ def get_time(delta):
 
 
 def test_distribution_sends_report(harness):
-    # Yesterday's pull (1-3) then today's pull (4-6)
-    add_pulls(harness.db, [(1, 1, get_time(1), 100.0), (2, 2, get_time(1), 200.0), (3, 3, get_time(1), 50.0),
-                           (4, 1, get_time(0), 110.0), (5, 2, get_time(0), 150.0), (6, 3, get_time(0), 50.0)])
+    # Yesterday's pull (1-20) then today's pull (21-40)
+    count = len(PRICED_STOCKS)
+    add_pulls(harness.db, [(stock_id, stock_id, get_time(1), yesterday) for (stock_id, _, _, yesterday, _) in PRICED_STOCKS] +
+                          [(count + stock_id, stock_id, get_time(0), today) for (stock_id, _, _, _, today) in PRICED_STOCKS])
 
     email = run_distribution(harness)
 
-    expected_rows = {
-        "Alphabet Inc Class A,GOOGL:NASDAQ,100.0,110.0,10.0,0.1",
-        "Apple Inc,AAPL:NASDAQ,200.0,150.0,-50.0,-0.25",
-        "Microsoft Corp,MSFT:NASDAQ,50.0,50.0,0.0,0.0",
-    }
-    with open(harness.config["email_config"]["attachment"]) as report:
-        csv_lines = report.read().splitlines()
-    assert csv_lines[0] == CSV_HEADER
-    assert set(csv_lines[1:]) == expected_rows
+    # Alphabetical by market, then by name
+    expected_rows = [
+        XLSX_HEADER,
+        ("Adobe Inc", "ADBE", "NASDAQ", 500.0, 470.0, -30.0, -0.06),
+        ("Advanced Micro Devices Inc", "AMD", "NASDAQ", 160.0, 164.0, 4.0, 0.025),
+        ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1),
+        ("Amazon.com Inc", "AMZN", "NASDAQ", 180.0, 189.0, 9.0, 0.05),
+        ("Apple Inc", "AAPL", "NASDAQ", 200.0, 150.0, -50.0, -0.25),
+        ("Intel Corp", "INTC", "NASDAQ", 30.0, 27.0, -3.0, -0.1),
+        ("Meta Platforms Inc", "META", "NASDAQ", 500.0, 490.0, -10.0, -0.02),
+        ("Microsoft Corp", "MSFT", "NASDAQ", 50.0, 50.0, 0.0, 0.0),
+        ("Netflix Inc", "NFLX", "NASDAQ", 600.0, 612.0, 12.0, 0.02),
+        ("NVIDIA Corp", "NVDA", "NASDAQ", 120.0, 138.0, 18.0, 0.15),
+        ("PayPal Holdings Inc", "PYPL", "NASDAQ", 80.0, 79.0, -1.0, -0.0125),
+        ("Tesla Inc", "TSLA", "NASDAQ", 250.0, 200.0, -50.0, -0.2),
+        ("Coca-Cola Co", "KO", "NYSE", 200.0, 202.0, 2.0, 0.01),
+        ("International Business Machines Corp", "IBM", "NYSE", 200.0, 207.0, 7.0, 0.035),
+        ("JPMorgan Chase & Co", "JPM", "NYSE", 150.0, 138.0, -12.0, -0.08),
+        ("Oracle Corp", "ORCL", "NYSE", 140.0, 133.0, -7.0, -0.05),
+        ("Salesforce Inc", "CRM", "NYSE", 300.0, 324.0, 24.0, 0.08),
+        ("Uber Technologies Inc", "UBER", "NYSE", 70.0, 84.0, 14.0, 0.2),
+        ("Walmart Inc", "WMT", "NYSE", 100.0, 104.0, 4.0, 0.04),
+        ("Walt Disney Co", "DIS", "NYSE", 100.0, 97.0, -3.0, -0.03),
+    ]
+    workbook = openpyxl.load_workbook(harness.config["email_config"]["attachment"])
+    assert workbook.sheetnames == ["Dashboard", "Stock Data"]
+    assert list(workbook["Stock Data"].iter_rows(values_only=True))[:len(expected_rows)] == expected_rows
+    # gains are shaded green and losses red; no change is a plain black 0
+    data_sheet = workbook["Stock Data"]
+    uber, microsoft, apple = data_sheet["G19"], data_sheet["G9"], data_sheet["G6"]
+    assert uber.fill.fill_type == "solid" and uber.fill.start_color.rgb[-6:] == "469358"
+    assert apple.fill.fill_type == "solid" and apple.fill.start_color.rgb[-6:] == "B3261E"
+    assert microsoft.fill.fill_type is None and microsoft.font.color.rgb[-6:] == "000000"
 
-    assert len(harness.genai.questions) == 1
-    assert "which three stocks had the biggest change" in harness.genai.questions[0]
-    assert all(row in harness.genai.questions[0] for row in expected_rows)
+    # the canned answer comes on the first ask; real Gemini may skip busy models, asking the same question
+    # of up to every model in analyzer.GEMINI_MODELS
+    questions = harness.genai.questions
+    if GEMINI_KEY:
+        assert 1 <= len(questions) <= len(sys.modules["analyzer"].GEMINI_MODELS) and len(set(questions)) == 1
+    else:
+        assert len(questions) == 1
+    question = questions[0]
+    assert "top three gainers and top three losers" in question
+    gainers, losers = question.split("Top losers:")
+    assert all(name in gainers for name in ["Uber Technologies Inc", "NVIDIA Corp", "Alphabet Inc Class A"])
+    assert all(name in losers for name in ["Apple Inc", "Tesla Inc", "Intel Corp"])
+    # only the top three of each are asked about, each with its latest news
+    assert "Salesforce" not in question and "JPMorgan" not in question
+    if not LIVE_NEWS:
+        assert [query.split()[0] for query in harness.google_news.queries] == ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]
+        assert all('Latest news: "{}" ({},'.format(title, source) in question for (title, source, _) in CANNED_NEWS.values())
 
     assert len(harness.yag.sent) == 1
     assert email["to"] == USERS
     assert email["subject"].startswith("Todays Stock Data ")
-    assert email["contents"] and email["contents"] != AI_ERROR_ANSWER
+    # the email body is the Dashboard as one line of HTML (yagmail would turn line breaks into <br>)
+    body = email["contents"]
+    assert "\n" not in body and AI_ERROR_ANSWER not in body
+    assert "⛅ Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%" in body
+    assert "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%" in body
+    positions = [body.index("<b>{}</b>".format(ticker)) for ticker in ["UBER", "NVDA", "GOOGL", "AAPL", "TSLA", "INTC"]]
+    assert positions == sorted(positions)
+    assert "Salesforce" not in body and "All 20 stocks are in the attached spreadsheet." in body
+    if not LIVE_NEWS:
+        assert '<a href="https://news.example.com/2026/10/uber-robotaxi-expansion">Uber Takes Robotaxis to Ten More Cities</a>' in body
+    if not GEMINI_KEY and not LIVE_NEWS:
+        assert "<b>Latest UBER news:</b> Uber is expanding its robotaxi service to ten more cities." in body
+    sheets = list(email["attachments"].values())[0]
+    assert sheets["Stock Data"][:len(expected_rows)] == expected_rows
+    # the Dashboard summarises the day and lists the top gainers and losers (rows 8-13)
+    dashboard = sheets["Dashboard"]
+    assert dashboard[2][0] == "\u26c5 Mixed day — 10 up · 9 down · 1 flat · watchlist average ▼ 0.46%"
+    assert dashboard[3][0] == "Biggest gain UBER ▲ 20.00% · biggest drop AAPL ▼ 25.00%"
+    table = dashboard[7:13]
+    assert [row[:3] for row in table] == [
+        ("\U0001F42E Gainer", "UBER", 0.2), ("\U0001F42E Gainer", "NVDA", 0.15), ("\U0001F42E Gainer", "GOOGL", 0.1),
+        ("\U0001F43B Loser", "AAPL", -0.25), ("\U0001F43B Loser", "TSLA", -0.2), ("\U0001F43B Loser", "INTC", -0.1)]
     if not GEMINI_KEY:
-        assert email["contents"] == CANNED_AI_ANSWER
-    assert list(email["attachments"].values()) == ["\n".join(csv_lines) + "\n"]
+        assert [row[3] for row in table] == ["Product / orders", "Product / orders", "Earnings / results",
+                                             "Product / orders", "Earnings / results", "Guidance / outlook"]
+    if not GEMINI_KEY and not LIVE_NEWS:
+        assert table[0][4] == "Uber is expanding its robotaxi service to ten more cities."
+    if not LIVE_NEWS:
+        assert table[0][5] == "Uber Takes Robotaxis to Ten More Cities (Example News)"
     assert_finished(harness)
 
 
@@ -336,6 +504,16 @@ def test_distribution_still_emails_when_ai_fails(harness):
     email = run_distribution(harness)
 
     assert email["subject"].startswith("Todays Stock Data ")
-    assert email["contents"] == AI_ERROR_ANSWER
-    assert list(email["attachments"].values())[0].startswith(CSV_HEADER)
+    # each of the four Gemini models was asked (waiting 30, 60 then 90 seconds in between), then the email
+    # still has the Dashboard, with a note that the AI's insight is missing
+    assert len(harness.genai.questions) == 4 and harness.waits == [30, 60, 90]
+    assert AI_ERROR_ANSWER in email["contents"] and "GOOGL" in email["contents"]
+    if not LIVE_NEWS:
+        assert "No summary available." in email["contents"]
+    sheets = list(email["attachments"].values())[0]
+    assert sheets["Stock Data"][:2] == [XLSX_HEADER, ("Alphabet Inc Class A", "GOOGL", "NASDAQ", 100.0, 110.0, 10.0, 0.1)]
+    # without the AI's answer the Dashboard still lists the gainer and its news link, just without a summary
+    assert sheets["Dashboard"][7][:4] == ("\U0001F42E Gainer", "GOOGL", 0.1, "—")
+    if not LIVE_NEWS:
+        assert sheets["Dashboard"][7][4] == "No summary available."
     assert_finished(harness)
